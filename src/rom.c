@@ -6,11 +6,10 @@
 
 int rom_parse(char* path, ROM_Header* header)
 {
-	/* Get ROM file header */
+	/* Get ROM file header and check validity */
 	FILE* rom = fopen(path, "rb");
 	int read = fread(header, 1, sizeof(ROM_Header), rom);
 	fclose(rom);
-
 	return (read == sizeof(ROM_Header) && !memcmp("NES\x1A", header->magic, 4));
 }
 
@@ -34,6 +33,8 @@ int main(int argc, char** argv)
 
 	printf("VS Unisystem: %s\n", (head.flags2 & 1) ? "YES" : "NO");
 	printf("PlayChoice-10: %s\n", (head.flags2 & 2) ? "YES" : "NO");
+		
+	printf("Color: %s\n", (head.flags3 & 1) ? "PAL" : "NTSC");
 
 	return 0;
 }
