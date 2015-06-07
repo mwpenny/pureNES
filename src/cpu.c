@@ -23,16 +23,11 @@
 
 */
 
-void exec(unsigned char opcode)
-{
-	opcodes[opcode];
-}
-
 /* TODO: FIX + INDIRECT JUMP BUG?*/
-unsigned short cpu_normalize_addr(CPU* cpu, unsigned char* opcode)
+uint16_t cpu_normalize_addr(CPU* cpu, uint8_t* opcode)
 {
 	mode m = modes[*opcode];
-	unsigned short address;
+	uint16_t address;
 
 	switch (modes[*opcode])
 	{
@@ -79,383 +74,479 @@ unsigned short cpu_normalize_addr(CPU* cpu, unsigned char* opcode)
 	return address;
 }
 
-void exec(CPU* cpu, unsigned char* opcode)
+void exec(CPU* cpu, uint8_t* opcode)
 {
 	opcodes[*opcode](cpu, cpu_normalize_addr(cpu, opcode));
 }
 
 void cpu_reset(CPU* cpu)
 {
-	cpu->p = 0x34; /* IRQ disabled */ /* 0b00100000 */
+	cpu->p = 0x34; /* unused, break, and IRQ disable flags (0b00110100) */
 	cpu->a = cpu->x = cpu->y = 0;
-	cpu->sp = 0xFD;
-	/* TODO: set PC to address at 0xFFFC and 0xFFFD (reset vector) */
+	cpu->sp = 0x00;
+
+	/* TODO: don't actually push anything? */
+	/* push pc */
+	stack[cpu->sp--] = (cpu->pc-1) >> 8;
+	stack[cpu->sp--] = (cpu->pc-1) & 0xFF;
+
+	/* push p */
+	cpu_PHP(cpu);
+
+	/* sp should be 0xFD */
+
+	/* jump to reset vector */
+	cpu_JMP(cpu, ram[0xFFFC] & (ram[0xFFFD] << 8));
+
 
 	/* TODO: init memory */
-	/* after reset, SP is decremented by 3 (that rhymed) */
 	/* after reset, IRQ disable flag set to true (ORed with 0x04) */
 	/* after reset, APU is silenced */
 }
 
-void cpu_chk_neg(CPU* cpu, unsigned char val)
+void cpu_chk_aflags(CPU* cpu, uint8_t val)
 {
+	/* negative */
 	if (val & 0x80) cpu->p |= 0x80;
 	else cpu->p &= 0x7F;
-}
 
-void cpu_chk_zer(CPU* cpu, unsigned char val)
-{
+	/* zero */
 	if (!val) cpu->p |= 0x02;
 	else cpu->p &= 0xFD;
 }
 
+/*** Load/store operations ***/
 
-/* Load/store operations*/
-void cpu_LDA(CPU* cpu, unsigned short address)
+/* LDA - load accumulator */
+void cpu_LDA(CPU* cpu, uint16_t address)
 {
 	cpu->a = ram[address];
-	cpu_chk_zer(cpu, cpu->a);
-	cpu_chk_neg(cpu, cpu->a);
+	cpu_chk_aflags(cpu, cpu->a);
 }
-void cpu_LDX(CPU* cpu, unsigned short address)
+
+/* LDX - load x register */
+void cpu_LDX(CPU* cpu, uint16_t address)
 {
 	cpu->x = ram[address];
-	cpu_chk_zer(cpu, cpu->x);
-	cpu_chk_neg(cpu, cpu->x);
+	cpu_chk_aflags(cpu, cpu->a);
 }
-void cpu_LDY(CPU* cpu, unsigned short address)
+
+/* LDY - load y register */
+void cpu_LDY(CPU* cpu, uint16_t address)
 {
 	cpu->y = ram[address];
-	cpu_chk_zer(cpu, cpu->y);
-	cpu_chk_neg(cpu, cpu->y);
+	cpu_chk_aflags(cpu, cpu->a);
 }
-void cpu_STA(CPU* cpu, unsigned short address)
+
+/* STA - store accumulator */
+void cpu_STA(CPU* cpu, uint16_t address)
 {
 	ram[address] = cpu->a;
 }
-void cpu_STX(CPU* cpu, unsigned short address)
+
+/* STX - store x register */
+void cpu_STX(CPU* cpu, uint16_t address)
 {
 	ram[address] = cpu->x;
 }
-void cpu_STY(CPU* cpu, unsigned short address)
+
+/* STY - store y register */
+void cpu_STY(CPU* cpu, uint16_t address)
 {
 	ram[address] = cpu->y;
 }
 
-/* Register transfers */
+
+/*** Register transfers ***/
+
+/* TAX - transfer accumulator to x */
 void cpu_TAX(CPU* cpu)
 {
 	cpu->x = cpu->a;
-	cpu_chk_zer(cpu, cpu->x);
-	cpu_chk_neg(cpu, cpu->x);
+	cpu_chk_aflags(cpu, cpu->a);
 }
+
+/* TAY - transfer accumulator to y */
 void cpu_TAY(CPU* cpu)
 {
 	cpu->y = cpu->a;
-	cpu_chk_zer(cpu, cpu->y);
-	cpu_chk_neg(cpu, cpu->y);
+	cpu_chk_aflags(cpu, cpu->a);
 }
-void cpu_TXA(CPU* cpu) /* TODO: POTENTIAL OPTIMIZATION: function to transfer arbitrary values to a */
+
+/* TXA - transfer x to accumulator */
+void cpu_TXA(CPU* cpu)
 {
 	cpu->a = cpu->x;
-	cpu_chk_zer(cpu, cpu->a);
-	cpu_chk_neg(cpu, cpu->a);
+	cpu_chk_aflags(cpu, cpu->a);
 }
+
+/* TYA - transfer y to accumulator */
 void cpu_TYA(CPU* cpu)
 {
 	cpu->a = cpu->y;
-	cpu_chk_zer(cpu, cpu->a);
-	cpu_chk_neg(cpu, cpu->a);
+	cpu_chk_aflags(cpu, cpu->a);
 }
 
-/* Stack operations */
+
+/*** Stack operations ***/
+
+/* TSX - transfer stack pointer to x */
 void cpu_TSX(CPU* cpu)
 {
 	cpu->x = cpu->sp;
-	cpu_chk_zer(cpu, cpu->x);
-	cpu_chk_neg(cpu, cpu->x);
+	cpu_chk_aflags(cpu, cpu->a);
 }
+
+/* TXS - transfer x to stack pointer */
 void cpu_TXS(CPU* cpu)
 {
 	cpu->sp = cpu->x;
 }
+
+/* PHA - push accumulator on stack */
 void cpu_PHA(CPU* cpu)
 {
 	stack[cpu->sp--] = cpu->a;
 }
+
+/* PHP - push processor status on stack */
 void cpu_PHP(CPU* cpu)
 {
 	stack[cpu->sp--] = cpu->p;
 }
+
+/* PLA - pull accumulator from stack */
 void cpu_PLA(CPU* cpu)
 {
 	cpu->a = stack[++cpu->sp];
-	cpu_chk_zer(cpu, cpu->a);
-	cpu_chk_neg(cpu, cpu->a);
+	cpu_chk_aflags(cpu, cpu->a);
 }
+
+/* PLP - pull processor status from stack */
 void cpu_PLP(CPU* cpu)
 {
 	cpu->p = stack[++cpu->sp];
 }
 
-/* Logical operations */
-void cpu_AND(CPU* cpu, unsigned short address)
+
+/*** Logical operations ***/
+
+/* AND - logical AND with accumulator */
+void cpu_AND(CPU* cpu, uint16_t address)
 {
 	cpu->a &= ram[address];
-	cpu_chk_zer(cpu, cpu->a);
-	cpu_chk_neg(cpu, cpu->a);
+	cpu_chk_aflags(cpu, cpu->a);
 }
-void cpu_EOR(CPU* cpu, unsigned short address)
+
+/* EOR - exclusive OR with accumulator */
+void cpu_EOR(CPU* cpu, uint16_t address)
 {
 	cpu->a ^= ram[address];
-	cpu_chk_zer(cpu, cpu->a);
-	cpu_chk_neg(cpu, cpu->a);
+	cpu_chk_aflags(cpu, cpu->a);
 }
-void cpu_ORA(CPU* cpu, unsigned short address)
+
+/* ORA - inclusive OR with accumulator */
+void cpu_ORA(CPU* cpu, uint16_t address)
 {
 	cpu->a |= ram[address];
-	cpu_chk_zer(cpu, cpu->a);
-	cpu_chk_neg(cpu, cpu->a);
+	cpu_chk_aflags(cpu, cpu->a);
 }
-void cpu_BIT(CPU* cpu, unsigned short address) /* TODO: without branching? */
+
+/* BIT - bit test with mask pattern in accumulator */
+void cpu_BIT(CPU* cpu, uint16_t address) /* TODO: without branching? */
 {
-	if ((cpu->a & ram[address])) cpu->p &= 0xFD;
+	if ((cpu->a & ram[address])) cpu->p &= 0xFD; /* zero flag */
 	else cpu->p |= 0x02;
 	cpu->p &= 0x3F; /* clear bits 6 and 7 */
 	cpu->p |= (ram[address] & 0xC0); /* copy bits 6 and 7 from the memory location */
 }
 
-/* Arithmetic operations */
-void cpu_ADC(CPU* cpu, unsigned short address)
+
+/*** Arithmetic operations ***/
+
+/* ADC - add with carry to accumulator */
+void cpu_ADC(CPU* cpu, uint16_t address)
 {
-	int val = cpu->a + ram[address] + (cpu->p & 0x01);
-	if (val > 0xFF) cpu_SEC(cpu);
+	long val = cpu->a + ram[address] + (cpu->p & 0x01); /* long --> min 32 bits */
+	if (val & 0x100) cpu_SEC(cpu);
 	else cpu_CLC(cpu);
 
-	if (!((cpu->a ^ ram[address]) & 0x80) && ((cpu->a ^ val) & 0x80))
+	if ((~(cpu->a ^ ram[address]) & (cpu->a ^ val)) & 0x80)
 		cpu->p |= 0x40;
 	else
 		cpu_CLV(cpu);
 
 	cpu->a = val;
-	cpu_chk_zer(cpu, cpu->a);
-	cpu_chk_neg(cpu, cpu->a);
-}
-void cpu_SBC(CPU* cpu, unsigned short address)
-{
-	int val = cpu->a - ram[address] - ~(cpu->p & 0x01);
-	if (val > 0xFF) cpu_CLC(cpu);
-	else cpu_SEC(cpu);
-
-	if (((cpu->a ^ ram[address]) & 0x80) && ((cpu->a ^ val) & 0x80))
-		cpu->p |= 0x40;
-	else
-		cpu_CLV(cpu);
-
-	cpu->a = val;
-	cpu_chk_zer(cpu, cpu->a);
-	cpu_chk_neg(cpu, cpu->a);
+	cpu_chk_aflags(cpu, cpu->a);
 }
 
-/* TODO: generic compare function */
-void cpu_CMP(CPU* cpu, unsigned short address)
+/* SBC - subtract with carry from accumulator */
+void cpu_SBC(CPU* cpu, uint16_t address)
 {
-	unsigned char val = cpu->a - ram[address];
+	cpu_ADC(cpu, ~ram[address]); /* -ram[address] - 1 */
+}
+
+/* CMP - compare with accumulator */
+void cpu_CMP(CPU* cpu, uint16_t address)
+{
+	uint8_t val = cpu->a - ram[address];
 	if (val >= 0) cpu_SEC(cpu);
 	else cpu_CLC(cpu);
-	cpu_chk_zer(cpu, val);
-	cpu_chk_neg(cpu, val);
-}
-void cpu_CPX(CPU* cpu, unsigned short address)
-{
-	unsigned char val = cpu->x - ram[address];
-	if (val >= 0) cpu_SEC(cpu);
-	else cpu_CLC(cpu);
-	cpu_chk_zer(cpu, val);
-	cpu_chk_neg(cpu, val);
-}
-void cpu_CPY(CPU* cpu, unsigned short address)
-{
-	unsigned char val = cpu->y - ram[address];
-	if (val >= 0) cpu_SEC(cpu);
-	else cpu_CLC(cpu);
-	cpu_chk_zer(cpu, val);
-	cpu_chk_neg(cpu, val);
+	cpu_chk_aflags(cpu, cpu->a);
 }
 
-/* Increments and decrements */
-/* TODO: generic inc/dec function? */
-void cpu_INC(CPU* cpu, unsigned short address)
+/* CPX - compare with x register */
+void cpu_CPX(CPU* cpu, uint16_t address)
+{
+	uint8_t val = cpu->x - ram[address];
+	if (val >= 0) cpu_SEC(cpu);
+	else cpu_CLC(cpu);
+	cpu_chk_aflags(cpu, cpu->a);
+}
+
+/* CPY - compare with y register */
+void cpu_CPY(CPU* cpu, uint16_t address)
+{
+	uint8_t val = cpu->y - ram[address];
+	if (val >= 0) cpu_SEC(cpu);
+	else cpu_CLC(cpu);
+	cpu_chk_aflags(cpu, cpu->a);
+}
+
+
+/*** Increments and decrements ***/
+
+/* INC - increment memory location */
+void cpu_INC(CPU* cpu, uint16_t address)
 {
 	++ram[address];
-	cpu_chk_zer(cpu, ram[address]);
-	cpu_chk_neg(cpu, ram[address]);
+	cpu_chk_aflags(cpu, cpu->a);
 }
+
+/* INX - increment x register */
 void cpu_INX(CPU* cpu)
 {
 	++cpu->x;
-	cpu_chk_zer(cpu, cpu->x);
-	cpu_chk_neg(cpu, cpu->x);
+	cpu_chk_aflags(cpu, cpu->a);
 }
+
+/* INY - increment y register */
 void cpu_INY(CPU* cpu)
 {
 	++cpu->y;
-	cpu_chk_zer(cpu, cpu->y);
-	cpu_chk_neg(cpu, cpu->y);
+	cpu_chk_aflags(cpu, cpu->a);
 }
-void cpu_DEC(CPU* cpu, unsigned short address)
+
+/* DEC - decrement memory location */
+void cpu_DEC(CPU* cpu, uint16_t address)
 {
 	--ram[address];
-	cpu_chk_zer(cpu, ram[address]);
-	cpu_chk_neg(cpu, ram[address]);
+	cpu_chk_aflags(cpu, cpu->a);
 }
+
+/* DEX - decrement x register */
 void cpu_DEX(CPU* cpu)
 {
 	--cpu->x;
-	cpu_chk_zer(cpu, cpu->x);
-	cpu_chk_neg(cpu, cpu->x);
+	cpu_chk_aflags(cpu, cpu->a);
 }
+
+/* DEY - recrement y register */
 void cpu_DEY(CPU* cpu)
 {
 	--cpu->y;
-	cpu_chk_zer(cpu, cpu->y);
-	cpu_chk_neg(cpu, cpu->y);
+	cpu_chk_aflags(cpu, cpu->a);
 }
 
-/* Shifts */
-void cpu_ASL(CPU* cpu, unsigned short address)
+
+/*** Shifts ***/
+
+/* ASL - arithmetic shift left */
+void cpu_ASL(CPU* cpu, uint16_t address)
 {
-	unsigned char* val; /* TODO: determine if A or M */
+	uint8_t* val; /* TODO: determine if A or M */
 	cpu->p |= (*val & 0x80) >> 7;
 	*val <<= 1;
-	cpu_chk_zer(cpu, *val);
-	cpu_chk_neg(cpu, *val);
+	cpu_chk_aflags(cpu, cpu->a);
 }
-void cpu_LSR(CPU* cpu, unsigned short address)
+
+/* LSR - logical shift right */
+void cpu_LSR(CPU* cpu, uint16_t address)
 {
-	unsigned char* val; /* TODO: determine if A or M */
+	uint8_t* val; /* TODO: determine if A or M */
 	cpu->p |= *val & 0x01;
 	*val >>= 1;
-	cpu->p &= 0x7F;
-	cpu_chk_zer(cpu, *val);
-	cpu_chk_neg(cpu, *val);
+	cpu_chk_aflags(cpu, cpu->a);
 }
-void cpu_ROL(CPU* cpu, unsigned short address)
+
+/* ROL - rotate left */
+void cpu_ROL(CPU* cpu, uint16_t address)
 {
-	unsigned char* val; /* TODO: determine if A or M */
-	unsigned char carry = cpu->p & 0x01;
+	uint8_t* val; /* TODO: determine if A or M */
+	uint8_t carry = cpu->p & 0x01;
 	cpu->p |= (*val & 0x80) >> 7;
 	*val <<= 1;
 	*val |= carry;
-	cpu_chk_zer(cpu, *val);
-	cpu_chk_neg(cpu, *val);
+	cpu_chk_aflags(cpu, cpu->a);
 }
-void cpu_ROR(CPU* cpu, unsigned short address)
+
+/* ROR - rotate right */
+void cpu_ROR(CPU* cpu, uint16_t address)
 {
-	unsigned char* val; /* TODO: determine if A or M */
-	unsigned char carry = cpu->p & 0x01;
+	uint8_t* val; /* TODO: determine if A or M */
+	uint8_t carry = cpu->p & 0x01;
 	cpu->p |= *val & 0x01;
 	*val >>= 1;
 	*val |= carry << 7;
-	cpu_chk_zer(cpu, *val);
-	cpu_chk_neg(cpu, *val);
+	cpu_chk_aflags(cpu, cpu->a);
 }
 
-/* Jumps and calls */
-void cpu_JMP(CPU* cpu, unsigned short address)
+
+/*** Jumps and calls ***/
+
+/* JMP - jump to location */
+void cpu_JMP(CPU* cpu, uint16_t address)
 {
 	cpu->pc = address;
 }
-void cpu_JSR(CPU* cpu, unsigned short address)
+
+/* JSR - jump to subroutine */
+void cpu_JSR(CPU* cpu, uint16_t address)
 {
 	stack[cpu->sp--] = (cpu->pc-1) >> 8;
 	stack[cpu->sp--] = (cpu->pc-1) & 0xFF;
 	cpu->pc = address;
 }
+
+/* RTS - return from subroutine */
 void cpu_RTS(CPU* cpu)
 {
-	cpu->pc = stack[++cpu->sp] | (stack[++cpu->sp] << 8) + 1;
+	cpu->pc = (stack[++cpu->sp] | (stack[++cpu->sp] << 8)) + 1;
 }
 
-/* Conditional branches */
-void cpu_BCC(CPU* cpu, unsigned short address)
+
+/*** Conditional branches ***/
+
+/* BCC - branch if carry flag clear */
+void cpu_BCC(CPU* cpu, uint16_t address)
 {
 	if (!(cpu->p & 0x01)) cpu->pc = address;
 }
-void cpu_BCS(CPU* cpu, unsigned short address)
+
+/* BCS - branch if carry flag set */
+void cpu_BCS(CPU* cpu, uint16_t address)
 {
 	if (cpu->p & 0x01) cpu->pc = address;
 }
-void cpu_BEQ(CPU* cpu, unsigned short address)
+
+/* BEQ - branch if zero flag set */
+void cpu_BEQ(CPU* cpu, uint16_t address)
 {
 	if (cpu->p & 0x02) cpu->pc = address;
 }
-void cpu_BMI(CPU* cpu, unsigned short address)
+
+/* BMI - branch if negative flag set */
+void cpu_BMI(CPU* cpu, uint16_t address)
 {
 	if (cpu->p & 0x80) cpu->pc = address;
 }
-void cpu_BNE(CPU* cpu, unsigned short address)
+
+/* BNE - branch if zero flag clear */
+void cpu_BNE(CPU* cpu, uint16_t address)
 {
 	if (!(cpu->p & 0x02)) cpu->pc = address;
 }
-void cpu_BPL(CPU* cpu, unsigned short address)
+
+/* BPL - branch if negative flag set */
+void cpu_BPL(CPU* cpu, uint16_t address)
 {
 	if (!(cpu->p & 0x80)) cpu->pc = address;
 }
-void cpu_BVC(CPU* cpu, unsigned short address)
+
+/* BVC - branch if overflow flag clear */
+void cpu_BVC(CPU* cpu, uint16_t address)
 {
 	if (!(cpu->p & 0x40)) cpu->pc = address;
 }
-void cpu_BVS(CPU* cpu, unsigned short address)
+
+/* BVC - branch if overflow flag set */
+void cpu_BVS(CPU* cpu, uint16_t address)
 {
 	if (cpu->p & 0x40) cpu->pc = address;
 }
 
-/* Status flag changes */
+
+/*** Status flag changes ***/
+
+/* CLC - clear carry flag */
 void cpu_CLC(CPU* cpu)
 {
 	cpu->p &= 0xFE;
 }
+
+/* CLD - clear decimal mode flag */
 void cpu_CLD(CPU* cpu)
 {
 	cpu->p &= 0xF7;
 }
+
+/* CLI - clear interrupt disable flag */
 void cpu_CLI(CPU* cpu)
 {
 	cpu->p &= 0xFB;
 }
+
+/* CLV - clear overflow flag */
 void cpu_CLV(CPU* cpu)
 {
 	cpu->p &= 0xBF;
 }
+
+/* SEC - set carry flag */
 void cpu_SEC(CPU* cpu)
 {
 	cpu->p |= 0x01;
 }
+
+/* SED - set decimal mode flag */
 void cpu_SED(CPU* cpu)
 {
 	cpu->p |= 0x08;
 }
+
+/* SEI - set interrupt disable flag */
 void cpu_SEI(CPU* cpu)
 {
 	cpu->p |= 0x04;
 }
 
-/* System */
+
+/*** System instructions ***/
+
+/* BRK - interrupt */
 void cpu_BRK(CPU* cpu)
 {
 	stack[cpu->sp--] = (cpu->pc) >> 8;
 	stack[cpu->sp--] = (cpu->pc) & 0xFF;
 	cpu_PHP(cpu);
 	cpu_SEI(cpu);
-	cpu->pc = 0xFFFE; /* TODO: endianness */
+	cpu->pc = ram[0xFFFE] & (ram[0xFFFF] << 8);
 }
+
+/* NOP - no operation */
 void cpu_NOP(CPU* cpu) {}
+
+/* RTI - return from interrupt */
 void cpu_RTI(CPU* cpu)
 {
 	cpu_PLP(cpu);
 	cpu->pc = stack[++cpu->sp] | (stack[++cpu->sp] << 8);
 }
+
+
+/*** Undocumented instructions ***/
+
+/* KIL - crash the processor */
 void cpu_KIL(CPU* cpu)
 {
 	/* TODO: CRASH PROCESSOR */
