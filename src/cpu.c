@@ -23,60 +23,60 @@
 
 */
 
-/* TODO: FIX + INDIRECT JUMP BUG?*/
-uint16_t cpu_normalize_addr(CPU* cpu, uint8_t* opcode)
+/* TODO: INDIRECT JUMP BUG?*/
+void cpu_get_oci(CPU* cpu, uint8_t* opcode, OCInfo* oci)
 {
-	mode m = modes[*opcode];
-	uint16_t address;
+	oci->opcode = *opcode;
 
+	/* interpret opcode operand based on addressing mode */
 	switch (modes[*opcode])
 	{
 	case mNUL:
 	case mIMP:
 	case mACC:
-		address = 0;
+		oci->operand = 0;
 		break;
 	case mIMM:
-		address = cpu->pc+1;
+		oci->operand = cpu->pc+1;
 		break;
 	case mZPG:
-		address = opcode[1] % 0xFF;
+		oci->operand = opcode[1] & 0xFF;
 		break;
 	case mZPX:
-		address = (opcode[1] + cpu->x) % 0xFF;
+		oci->operand = (opcode[1] + cpu->x) % 0xFF;
 		break;
 	case mZPY:
-		address = (opcode[1] + cpu->y) % 0xFF;
+		oci->operand = (opcode[1] + cpu->y) % 0xFF;
 		break;
 	case mREL:
-		address = cpu->pc + opcode[1];
+		oci->operand = cpu->pc + opcode[1];
 		break;
 	case mABS:
-		address = opcode[1] & (opcode[2] << 8);
+		oci->operand = opcode[1] & (opcode[2] << 8);
 		break;
 	case mABX:
-		address = (opcode[1] & (opcode[2] << 8)) + cpu->x;
+		oci->operand = (opcode[1] & (opcode[2] << 8)) + cpu->x;
 		break;
 	case mABY:
-		address = (opcode[1] & (opcode[2] << 8)) + cpu->y;
+		oci->operand = (opcode[1] & (opcode[2] << 8)) + cpu->y;
 		break;
 	case mIND:
-		address = ram[(opcode[1] & (opcode[2] << 8))];
+		oci->operand = memory_get((opcode[1] & (opcode[2] << 8)));
 		break;
 	case mXID:
-		address = ram[((opcode[1] & (opcode[2] << 8)) + cpu->x) % 0xFF];
+		oci->operand = memory_get(((opcode[1] & (opcode[2] << 8)) + cpu->x) % 0xFF);
 		break;
 	case mIDY:
-		address = (ram[(opcode[1] & (opcode[2] << 8))] + cpu->y) % 0xFF;
+		oci->operand = (memory_get(opcode[1] & (opcode[2] << 8)) + cpu->y) % 0xFF;
 		break;
 	}
-
-	return address;
 }
 
 void exec(CPU* cpu, uint8_t* opcode)
 {
-	opcodes[*opcode](cpu, cpu_normalize_addr(cpu, opcode));
+	OCInfo oci;
+	cpu_get_oci(cpu, opcode, &oci);
+	opcodes[oci.opcode](cpu, &oci);
 }
 
 void cpu_reset(CPU* cpu)
@@ -87,16 +87,16 @@ void cpu_reset(CPU* cpu)
 
 	/* TODO: don't actually push anything? */
 	/* push pc */
-	stack[cpu->sp--] = (cpu->pc-1) >> 8;
-	stack[cpu->sp--] = (cpu->pc-1) & 0xFF;
+	memory_set(0x100 | cpu->sp--, (cpu->pc) >> 8);
+	memory_set(0x100 | cpu->sp--, (cpu->pc) & 0xFF);
 
 	/* push p */
-	cpu_PHP(cpu);
+	memory_set(0x100 | cpu->sp--, cpu->p);
 
 	/* sp should be 0xFD */
 
 	/* jump to reset vector */
-	cpu_JMP(cpu, ram[0xFFFC] & (ram[0xFFFD] << 8));
+	cpu->pc = memory_get16(0xFFFC);
 
 
 	/* TODO: init memory */
@@ -118,70 +118,70 @@ void cpu_chk_aflags(CPU* cpu, uint8_t val)
 /*** Load/store operations ***/
 
 /* LDA - load accumulator */
-void cpu_LDA(CPU* cpu, uint16_t address)
+void cpu_LDA(CPU* cpu, OCInfo* oci)
 {
-	cpu->a = ram[address];
+	cpu->a = memory_get(oci->operand);
 	cpu_chk_aflags(cpu, cpu->a);
 }
 
 /* LDX - load x register */
-void cpu_LDX(CPU* cpu, uint16_t address)
+void cpu_LDX(CPU* cpu, OCInfo* oci)
 {
-	cpu->x = ram[address];
+	cpu->x = memory_get(oci->operand);
 	cpu_chk_aflags(cpu, cpu->a);
 }
 
 /* LDY - load y register */
-void cpu_LDY(CPU* cpu, uint16_t address)
+void cpu_LDY(CPU* cpu, OCInfo* oci)
 {
-	cpu->y = ram[address];
+	cpu->y = memory_get(oci->operand);
 	cpu_chk_aflags(cpu, cpu->a);
 }
 
 /* STA - store accumulator */
-void cpu_STA(CPU* cpu, uint16_t address)
+void cpu_STA(CPU* cpu, OCInfo* oci)
 {
-	ram[address] = cpu->a;
+	memory_set(oci->operand, cpu->a);
 }
 
 /* STX - store x register */
-void cpu_STX(CPU* cpu, uint16_t address)
+void cpu_STX(CPU* cpu, OCInfo* oci)
 {
-	ram[address] = cpu->x;
+	memory_set(oci->operand, cpu->x);
 }
 
 /* STY - store y register */
-void cpu_STY(CPU* cpu, uint16_t address)
+void cpu_STY(CPU* cpu, OCInfo* oci)
 {
-	ram[address] = cpu->y;
+	memory_set(oci->operand, cpu->y);
 }
 
 
 /*** Register transfers ***/
 
 /* TAX - transfer accumulator to x */
-void cpu_TAX(CPU* cpu)
+void cpu_TAX(CPU* cpu, OCInfo* oci)
 {
 	cpu->x = cpu->a;
 	cpu_chk_aflags(cpu, cpu->a);
 }
 
 /* TAY - transfer accumulator to y */
-void cpu_TAY(CPU* cpu)
+void cpu_TAY(CPU* cpu, OCInfo* oci)
 {
 	cpu->y = cpu->a;
 	cpu_chk_aflags(cpu, cpu->a);
 }
 
 /* TXA - transfer x to accumulator */
-void cpu_TXA(CPU* cpu)
+void cpu_TXA(CPU* cpu, OCInfo* oci)
 {
 	cpu->a = cpu->x;
 	cpu_chk_aflags(cpu, cpu->a);
 }
 
 /* TYA - transfer y to accumulator */
-void cpu_TYA(CPU* cpu)
+void cpu_TYA(CPU* cpu, OCInfo* oci)
 {
 	cpu->a = cpu->y;
 	cpu_chk_aflags(cpu, cpu->a);
@@ -191,125 +191,126 @@ void cpu_TYA(CPU* cpu)
 /*** Stack operations ***/
 
 /* TSX - transfer stack pointer to x */
-void cpu_TSX(CPU* cpu)
+void cpu_TSX(CPU* cpu, OCInfo* oci)
 {
 	cpu->x = cpu->sp;
 	cpu_chk_aflags(cpu, cpu->a);
 }
 
 /* TXS - transfer x to stack pointer */
-void cpu_TXS(CPU* cpu)
+void cpu_TXS(CPU* cpu, OCInfo* oci)
 {
 	cpu->sp = cpu->x;
 }
 
 /* PHA - push accumulator on stack */
-void cpu_PHA(CPU* cpu)
+void cpu_PHA(CPU* cpu, OCInfo* oci)
 {
-	stack[cpu->sp--] = cpu->a;
+	memory_set(0x100 | cpu->sp--, cpu->a);	
 }
 
 /* PHP - push processor status on stack */
-void cpu_PHP(CPU* cpu)
+void cpu_PHP(CPU* cpu, OCInfo* oci)
 {
-	stack[cpu->sp--] = cpu->p;
+	memory_set(0x100 | cpu->sp--, cpu->p);
 }
 
 /* PLA - pull accumulator from stack */
-void cpu_PLA(CPU* cpu)
+void cpu_PLA(CPU* cpu, OCInfo* oci)
 {
-	cpu->a = stack[++cpu->sp];
+	cpu->a = memory_get(0x100 | ++cpu->sp);
 	cpu_chk_aflags(cpu, cpu->a);
 }
 
 /* PLP - pull processor status from stack */
-void cpu_PLP(CPU* cpu)
+void cpu_PLP(CPU* cpu, OCInfo* oci)
 {
-	cpu->p = stack[++cpu->sp];
+	cpu->p =  memory_get(0x100 | ++cpu->sp);
 }
 
 
 /*** Logical operations ***/
 
 /* AND - logical AND with accumulator */
-void cpu_AND(CPU* cpu, uint16_t address)
+void cpu_AND(CPU* cpu, OCInfo* oci)
 {
-	cpu->a &= ram[address];
+	cpu->a &= memory_get(oci->operand);
 	cpu_chk_aflags(cpu, cpu->a);
 }
 
 /* EOR - exclusive OR with accumulator */
-void cpu_EOR(CPU* cpu, uint16_t address)
+void cpu_EOR(CPU* cpu, OCInfo* oci)
 {
-	cpu->a ^= ram[address];
+	cpu->a ^= memory_get(oci->operand);
 	cpu_chk_aflags(cpu, cpu->a);
 }
 
 /* ORA - inclusive OR with accumulator */
-void cpu_ORA(CPU* cpu, uint16_t address)
+void cpu_ORA(CPU* cpu, OCInfo* oci)
 {
-	cpu->a |= ram[address];
+	cpu->a |= memory_get(oci->operand);
 	cpu_chk_aflags(cpu, cpu->a);
 }
 
 /* BIT - bit test with mask pattern in accumulator */
-void cpu_BIT(CPU* cpu, uint16_t address) /* TODO: without branching? */
+void cpu_BIT(CPU* cpu, OCInfo* oci) /* TODO: without branching? */
 {
-	if ((cpu->a & ram[address])) cpu->p &= 0xFD; /* zero flag */
+	if ((cpu->a & memory_get(oci->operand))) cpu->p &= 0xFD; /* zero flag */
 	else cpu->p |= 0x02;
 	cpu->p &= 0x3F; /* clear bits 6 and 7 */
-	cpu->p |= (ram[address] & 0xC0); /* copy bits 6 and 7 from the memory location */
+	cpu->p |= (memory_get(oci->operand) & 0xC0); /* copy bits 6 and 7 from the memory location */
 }
 
 
 /*** Arithmetic operations ***/
 
 /* ADC - add with carry to accumulator */
-void cpu_ADC(CPU* cpu, uint16_t address)
+void cpu_ADC(CPU* cpu, OCInfo* oci)
 {
-	long val = cpu->a + ram[address] + (cpu->p & 0x01); /* long --> min 32 bits */
-	if (val & 0x100) cpu_SEC(cpu);
-	else cpu_CLC(cpu);
+	long val = cpu->a + memory_get(oci->operand) + (cpu->p & 0x01); /* long --> min 32 bits */
+	if (val & 0x100) cpu_SEC(cpu, oci);
+	else cpu_CLC(cpu, oci);
 
-	if ((~(cpu->a ^ ram[address]) & (cpu->a ^ val)) & 0x80)
+	if ((~(cpu->a ^ memory_get(oci->operand)) & (cpu->a ^ val)) & 0x80)
 		cpu->p |= 0x40;
 	else
-		cpu_CLV(cpu);
+		cpu_CLV(cpu, oci);
 
-	cpu->a = val;
+	cpu->a = (uint8_t)val;
 	cpu_chk_aflags(cpu, cpu->a);
 }
 
 /* SBC - subtract with carry from accumulator */
-void cpu_SBC(CPU* cpu, uint16_t address)
+void cpu_SBC(CPU* cpu, OCInfo* oci)
 {
-	cpu_ADC(cpu, ~ram[address]); /* -ram[address] - 1 */
+	oci->operand = ~memory_get(oci->operand);
+	cpu_ADC(cpu, oci); /* -operand - 1 */
 }
 
 /* CMP - compare with accumulator */
-void cpu_CMP(CPU* cpu, uint16_t address)
+void cpu_CMP(CPU* cpu, OCInfo* oci)
 {
-	uint8_t val = cpu->a - ram[address];
-	if (val >= 0) cpu_SEC(cpu);
-	else cpu_CLC(cpu);
+	uint8_t val = cpu->a - memory_get(oci->operand);
+	if (val >= 0) cpu_SEC(cpu, oci);
+	else cpu_CLC(cpu, oci);
 	cpu_chk_aflags(cpu, cpu->a);
 }
 
 /* CPX - compare with x register */
-void cpu_CPX(CPU* cpu, uint16_t address)
+void cpu_CPX(CPU* cpu, OCInfo* oci)
 {
-	uint8_t val = cpu->x - ram[address];
-	if (val >= 0) cpu_SEC(cpu);
-	else cpu_CLC(cpu);
+	uint8_t val = cpu->x - memory_get(oci->operand);
+	if (val >= 0) cpu_SEC(cpu, oci);
+	else cpu_CLC(cpu, oci);
 	cpu_chk_aflags(cpu, cpu->a);
 }
 
 /* CPY - compare with y register */
-void cpu_CPY(CPU* cpu, uint16_t address)
+void cpu_CPY(CPU* cpu, OCInfo* oci)
 {
-	uint8_t val = cpu->y - ram[address];
-	if (val >= 0) cpu_SEC(cpu);
-	else cpu_CLC(cpu);
+	uint8_t val = cpu->y - memory_get(oci->operand);
+	if (val >= 0) cpu_SEC(cpu, oci);
+	else cpu_CLC(cpu, oci);
 	cpu_chk_aflags(cpu, cpu->a);
 }
 
@@ -317,42 +318,42 @@ void cpu_CPY(CPU* cpu, uint16_t address)
 /*** Increments and decrements ***/
 
 /* INC - increment memory location */
-void cpu_INC(CPU* cpu, uint16_t address)
+void cpu_INC(CPU* cpu, OCInfo* oci)
 {
-	++ram[address];
+	memory_set(oci->operand, memory_get(oci->operand)+1);
 	cpu_chk_aflags(cpu, cpu->a);
 }
 
 /* INX - increment x register */
-void cpu_INX(CPU* cpu)
+void cpu_INX(CPU* cpu, OCInfo* oci)
 {
 	++cpu->x;
 	cpu_chk_aflags(cpu, cpu->a);
 }
 
 /* INY - increment y register */
-void cpu_INY(CPU* cpu)
+void cpu_INY(CPU* cpu, OCInfo* oci)
 {
 	++cpu->y;
 	cpu_chk_aflags(cpu, cpu->a);
 }
 
 /* DEC - decrement memory location */
-void cpu_DEC(CPU* cpu, uint16_t address)
+void cpu_DEC(CPU* cpu, OCInfo* oci)
 {
-	--ram[address];
+	memory_set(oci->operand, memory_get(oci->operand)-1);
 	cpu_chk_aflags(cpu, cpu->a);
 }
 
 /* DEX - decrement x register */
-void cpu_DEX(CPU* cpu)
+void cpu_DEX(CPU* cpu, OCInfo* oci)
 {
 	--cpu->x;
 	cpu_chk_aflags(cpu, cpu->a);
 }
 
 /* DEY - recrement y register */
-void cpu_DEY(CPU* cpu)
+void cpu_DEY(CPU* cpu, OCInfo* oci)
 {
 	--cpu->y;
 	cpu_chk_aflags(cpu, cpu->a);
@@ -362,42 +363,46 @@ void cpu_DEY(CPU* cpu)
 /*** Shifts ***/
 
 /* ASL - arithmetic shift left */
-void cpu_ASL(CPU* cpu, uint16_t address)
+void cpu_ASL(CPU* cpu, OCInfo* oci)
 {
-	uint8_t* val; /* TODO: determine if A or M */
-	cpu->p |= (*val & 0x80) >> 7;
-	*val <<= 1;
+	/* opcode == 0x0A --> use accumulator value */
+	uint8_t val = oci->opcode == 0x0A ? cpu->a : memory_get(oci->operand);
+	cpu->p |= (val & 0x80) >> 7;
+	val <<= 1;
 	cpu_chk_aflags(cpu, cpu->a);
 }
 
 /* LSR - logical shift right */
-void cpu_LSR(CPU* cpu, uint16_t address)
+void cpu_LSR(CPU* cpu, OCInfo* oci)
 {
-	uint8_t* val; /* TODO: determine if A or M */
-	cpu->p |= *val & 0x01;
-	*val >>= 1;
+	/* opcode == 0x0A --> use accumulator value */
+	uint8_t val = oci->opcode == 0x0A ? cpu->a : memory_get(oci->operand);
+	cpu->p |= val & 0x01;
+	val >>= 1;
 	cpu_chk_aflags(cpu, cpu->a);
 }
 
 /* ROL - rotate left */
-void cpu_ROL(CPU* cpu, uint16_t address)
+void cpu_ROL(CPU* cpu, OCInfo* oci)
 {
-	uint8_t* val; /* TODO: determine if A or M */
+	/* opcode == 0x0A --> use accumulator value */
+	uint8_t val = oci->opcode == 0x0A ? cpu->a : memory_get(oci->operand);
 	uint8_t carry = cpu->p & 0x01;
-	cpu->p |= (*val & 0x80) >> 7;
-	*val <<= 1;
-	*val |= carry;
+	cpu->p |= (val & 0x80) >> 7;
+	val <<= 1;
+	val |= carry;
 	cpu_chk_aflags(cpu, cpu->a);
 }
 
 /* ROR - rotate right */
-void cpu_ROR(CPU* cpu, uint16_t address)
+void cpu_ROR(CPU* cpu, OCInfo* oci)
 {
-	uint8_t* val; /* TODO: determine if A or M */
+	/* opcode == 0x0A --> use accumulator value */
+	uint8_t val = oci->opcode == 0x0A ? cpu->a : memory_get(oci->operand);
 	uint8_t carry = cpu->p & 0x01;
-	cpu->p |= *val & 0x01;
-	*val >>= 1;
-	*val |= carry << 7;
+	cpu->p |= val & 0x01;
+	val >>= 1;
+	val |= carry << 7;
 	cpu_chk_aflags(cpu, cpu->a);
 }
 
@@ -405,117 +410,117 @@ void cpu_ROR(CPU* cpu, uint16_t address)
 /*** Jumps and calls ***/
 
 /* JMP - jump to location */
-void cpu_JMP(CPU* cpu, uint16_t address)
+void cpu_JMP(CPU* cpu, OCInfo* oci)
 {
-	cpu->pc = address;
+	cpu->pc = oci->operand;
 }
 
 /* JSR - jump to subroutine */
-void cpu_JSR(CPU* cpu, uint16_t address)
+void cpu_JSR(CPU* cpu, OCInfo* oci)
 {
-	stack[cpu->sp--] = (cpu->pc-1) >> 8;
-	stack[cpu->sp--] = (cpu->pc-1) & 0xFF;
-	cpu->pc = address;
+	memory_set(0x100 | cpu->sp--, (cpu->pc-1) >> 8);
+	memory_set(0x100 | cpu->sp--, (cpu->pc-1) & 0xFF);
+	cpu->pc = oci->operand;
 }
 
 /* RTS - return from subroutine */
-void cpu_RTS(CPU* cpu)
+void cpu_RTS(CPU* cpu, OCInfo* oci)
 {
-	cpu->pc = (stack[++cpu->sp] | (stack[++cpu->sp] << 8)) + 1;
+	cpu->pc = (memory_get(0x100 | ++cpu->sp) | (memory_get(0x100 | ++cpu->sp) << 8)) + 1;
 }
 
 
 /*** Conditional branches ***/
 
 /* BCC - branch if carry flag clear */
-void cpu_BCC(CPU* cpu, uint16_t address)
+void cpu_BCC(CPU* cpu, OCInfo* oci)
 {
-	if (!(cpu->p & 0x01)) cpu->pc = address;
+	if (!(cpu->p & 0x01)) cpu->pc = oci->operand;
 }
 
 /* BCS - branch if carry flag set */
-void cpu_BCS(CPU* cpu, uint16_t address)
+void cpu_BCS(CPU* cpu, OCInfo* oci)
 {
-	if (cpu->p & 0x01) cpu->pc = address;
+	if (cpu->p & 0x01) cpu->pc = oci->operand;
 }
 
 /* BEQ - branch if zero flag set */
-void cpu_BEQ(CPU* cpu, uint16_t address)
+void cpu_BEQ(CPU* cpu, OCInfo* oci)
 {
-	if (cpu->p & 0x02) cpu->pc = address;
+	if (cpu->p & 0x02) cpu->pc = oci->operand;
 }
 
 /* BMI - branch if negative flag set */
-void cpu_BMI(CPU* cpu, uint16_t address)
+void cpu_BMI(CPU* cpu, OCInfo* oci)
 {
-	if (cpu->p & 0x80) cpu->pc = address;
+	if (cpu->p & 0x80) cpu->pc = oci->operand;
 }
 
 /* BNE - branch if zero flag clear */
-void cpu_BNE(CPU* cpu, uint16_t address)
+void cpu_BNE(CPU* cpu, OCInfo* oci)
 {
-	if (!(cpu->p & 0x02)) cpu->pc = address;
+	if (!(cpu->p & 0x02)) cpu->pc = oci->operand;
 }
 
 /* BPL - branch if negative flag set */
-void cpu_BPL(CPU* cpu, uint16_t address)
+void cpu_BPL(CPU* cpu, OCInfo* oci)
 {
-	if (!(cpu->p & 0x80)) cpu->pc = address;
+	if (!(cpu->p & 0x80)) cpu->pc = oci->operand;
 }
 
 /* BVC - branch if overflow flag clear */
-void cpu_BVC(CPU* cpu, uint16_t address)
+void cpu_BVC(CPU* cpu, OCInfo* oci)
 {
-	if (!(cpu->p & 0x40)) cpu->pc = address;
+	if (!(cpu->p & 0x40)) cpu->pc = oci->operand;
 }
 
 /* BVC - branch if overflow flag set */
-void cpu_BVS(CPU* cpu, uint16_t address)
+void cpu_BVS(CPU* cpu, OCInfo* oci)
 {
-	if (cpu->p & 0x40) cpu->pc = address;
+	if (cpu->p & 0x40) cpu->pc = oci->operand;
 }
 
 
 /*** Status flag changes ***/
 
 /* CLC - clear carry flag */
-void cpu_CLC(CPU* cpu)
+void cpu_CLC(CPU* cpu, OCInfo* oci)
 {
 	cpu->p &= 0xFE;
 }
 
 /* CLD - clear decimal mode flag */
-void cpu_CLD(CPU* cpu)
+void cpu_CLD(CPU* cpu, OCInfo* oci)
 {
 	cpu->p &= 0xF7;
 }
 
 /* CLI - clear interrupt disable flag */
-void cpu_CLI(CPU* cpu)
+void cpu_CLI(CPU* cpu, OCInfo* oci)
 {
 	cpu->p &= 0xFB;
 }
 
 /* CLV - clear overflow flag */
-void cpu_CLV(CPU* cpu)
+void cpu_CLV(CPU* cpu, OCInfo* oci)
 {
 	cpu->p &= 0xBF;
 }
 
 /* SEC - set carry flag */
-void cpu_SEC(CPU* cpu)
+void cpu_SEC(CPU* cpu, OCInfo* oci)
 {
 	cpu->p |= 0x01;
 }
 
 /* SED - set decimal mode flag */
-void cpu_SED(CPU* cpu)
+void cpu_SED(CPU* cpu, OCInfo* oci)
 {
 	cpu->p |= 0x08;
 }
 
 /* SEI - set interrupt disable flag */
-void cpu_SEI(CPU* cpu)
+void cpu_SEI(CPU* cpu, OCInfo* oci)
 {
 	cpu->p |= 0x04;
 }
@@ -524,30 +529,30 @@ void cpu_SEI(CPU* cpu)
 /*** System instructions ***/
 
 /* BRK - interrupt */
-void cpu_BRK(CPU* cpu)
+void cpu_BRK(CPU* cpu, OCInfo* oci)
 {
-	stack[cpu->sp--] = (cpu->pc) >> 8;
-	stack[cpu->sp--] = (cpu->pc) & 0xFF;
-	cpu_PHP(cpu);
-	cpu_SEI(cpu);
-	cpu->pc = ram[0xFFFE] & (ram[0xFFFF] << 8);
+	memory_set(0x100 | cpu->sp--, (cpu->pc) >> 8);
+	memory_set(0x100 | cpu->sp--, (cpu->pc) & 0xFF);
+	cpu_PHP(cpu, oci);
+	cpu_SEI(cpu, oci);
+	cpu->pc = memory_get16(0xFFFE);
 }
 
 /* NOP - no operation */
-void cpu_NOP(CPU* cpu) {}
+void cpu_NOP(CPU* cpu, OCInfo* oci) {}
 
 /* RTI - return from interrupt */
-void cpu_RTI(CPU* cpu)
+void cpu_RTI(CPU* cpu, OCInfo* oci)
 {
-	cpu_PLP(cpu);
-	cpu->pc = stack[++cpu->sp] | (stack[++cpu->sp] << 8);
+	cpu_PLP(cpu, oci);
+	cpu->pc = (memory_get(0x100 | ++cpu->sp) | (memory_get(0x100 | ++cpu->sp) << 8));
 }
 
 
 /*** Undocumented instructions ***/
 
 /* KIL - crash the processor */
-void cpu_KIL(CPU* cpu)
+void cpu_KIL(CPU* cpu, OCInfo* oci)
 {
 	/* TODO: CRASH PROCESSOR */
 }

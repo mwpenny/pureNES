@@ -1,9 +1,10 @@
+/* Ricoh 2A03 (MOH 6502) */
+
 #ifndef CPU_H
 #define CPU_H
 
 #include <stdint.h>
-
-/* Ricoh 2A03 (MOH 6502) */
+#include "memory.h"
 
 /*
 Opcodes:
@@ -115,8 +116,29 @@ typedef struct
 	uint8_t a, x, y;	/* registers */
 } CPU;
 
-uint8_t stack[255];
-uint8_t ram[2048]; /* TODO: MEMORY MAPPING */
+typedef enum
+{
+	mNUL,	/* null (undefined opcodes. may implement later) */
+	mIMP,	/* implied */
+	mACC,	/* accumulator */
+	mIMM,	/* immediate */
+	mZPG,	/* zero page */
+	mZPX,	/* zero page, x-indexed */
+	mZPY,	/* zero page, y-indexed */
+	mREL,	/* relative */
+	mABS,	/* absolute */
+	mABX,	/* absolute, x-indexed */
+	mABY,	/* absolute, y-indexed */
+	mIND,	/* indirect */
+	mXID,	/* x-indexed, indirect */
+	mIDY,	/* indirect, y-indexed */
+} mode;
+
+typedef struct
+{
+	uint8_t opcode;
+	uint16_t operand;
+} OCInfo;
 
 void cpu_reset(CPU* cpu);
 
@@ -124,87 +146,87 @@ void cpu_reset(CPU* cpu);
 /*** TODO: reuse functions ***/
 /*** TODO: make static/inline? ***/
 
-/* Load/store operations*/
-void cpu_LDA(CPU* cpu, uint16_t address);
-void cpu_LDX(CPU* cpu, uint16_t address);
-void cpu_LDY(CPU* cpu, uint16_t address);
-void cpu_STA(CPU* cpu, uint16_t address);
-void cpu_STX(CPU* cpu, uint16_t address);
-void cpu_STY(CPU* cpu, uint16_t address);
+/* Load/store operations */
+void cpu_LDA(CPU* cpu, OCInfo* oci);
+void cpu_LDX(CPU* cpu, OCInfo* oci);
+void cpu_LDY(CPU* cpu, OCInfo* oci);
+void cpu_STA(CPU* cpu, OCInfo* oci);
+void cpu_STX(CPU* cpu, OCInfo* oci);
+void cpu_STY(CPU* cpu, OCInfo* oci);
 
 /* Register transfers */
-void cpu_TAX(CPU* cpu, uint16_t address);
-void cpu_TAY(CPU* cpu, uint16_t address);
-void cpu_TXA(CPU* cpu, uint16_t address);
-void cpu_TYA(CPU* cpu, uint16_t address);
+void cpu_TAX(CPU* cpu, OCInfo* oci);
+void cpu_TAY(CPU* cpu, OCInfo* oci);
+void cpu_TXA(CPU* cpu, OCInfo* oci);
+void cpu_TYA(CPU* cpu, OCInfo* oci);
 
 /* Stack operations */
-void cpu_TSX(CPU* cpu, uint16_t address);
-void cpu_TXS(CPU* cpu, uint16_t address);
-void cpu_PHA(CPU* cpu, uint16_t address);
-void cpu_PHA(CPU* cpu, uint16_t address);
-void cpu_PHP(CPU* cpu, uint16_t address);
-void cpu_PLA(CPU* cpu, uint16_t address);
-void cpu_PLP(CPU* cpu, uint16_t address);
+void cpu_TSX(CPU* cpu, OCInfo* oci);
+void cpu_TXS(CPU* cpu, OCInfo* oci);
+void cpu_PHA(CPU* cpu, OCInfo* oci);
+void cpu_PHA(CPU* cpu, OCInfo* oci);
+void cpu_PHP(CPU* cpu, OCInfo* oci);
+void cpu_PLA(CPU* cpu, OCInfo* oci);
+void cpu_PLP(CPU* cpu, OCInfo* oci);
 
 /* Logical operations */
-void cpu_AND(CPU* cpu, uint16_t address);
-void cpu_EOR(CPU* cpu, uint16_t address);
-void cpu_ORA(CPU* cpu, uint16_t address);
-void cpu_BIT(CPU* cpu, uint16_t address);
+void cpu_AND(CPU* cpu, OCInfo* oci);
+void cpu_EOR(CPU* cpu, OCInfo* oci);
+void cpu_ORA(CPU* cpu, OCInfo* oci);
+void cpu_BIT(CPU* cpu, OCInfo* oci);
 
 /* Arithmetic operations */
-void cpu_ADC(CPU* cpu, uint16_t address);
-void cpu_SBC(CPU* cpu, uint16_t address);
-void cpu_CMP(CPU* cpu, uint16_t address);
-void cpu_CPX(CPU* cpu, uint16_t address);
-void cpu_CPY(CPU* cpu, uint16_t address);
+void cpu_ADC(CPU* cpu, OCInfo* oci);
+void cpu_SBC(CPU* cpu, OCInfo* oci);
+void cpu_CMP(CPU* cpu, OCInfo* oci);
+void cpu_CPX(CPU* cpu, OCInfo* oci);
+void cpu_CPY(CPU* cpu, OCInfo* oci);
 
 /* Increments and decrements */
-void cpu_INC(CPU* cpu, uint16_t address);
-void cpu_INX(CPU* cpu, uint16_t address);
-void cpu_INY(CPU* cpu, uint16_t address);
-void cpu_DEC(CPU* cpu, uint16_t address);
-void cpu_DEX(CPU* cpu, uint16_t address);
-void cpu_DEY(CPU* cpu, uint16_t address);
+void cpu_INC(CPU* cpu, OCInfo* oci);
+void cpu_INX(CPU* cpu, OCInfo* oci);
+void cpu_INY(CPU* cpu, OCInfo* oci);
+void cpu_DEC(CPU* cpu, OCInfo* oci);
+void cpu_DEX(CPU* cpu, OCInfo* oci);
+void cpu_DEY(CPU* cpu, OCInfo* oci);
 
 /* Shifts */
-void cpu_ASL(CPU* cpu, uint16_t address);
-void cpu_LSR(CPU* cpu, uint16_t address);
-void cpu_ROL(CPU* cpu, uint16_t address);
-void cpu_ROR(CPU* cpu, uint16_t address);
+void cpu_ASL(CPU* cpu, OCInfo* oci);
+void cpu_LSR(CPU* cpu, OCInfo* oci);
+void cpu_ROL(CPU* cpu, OCInfo* oci);
+void cpu_ROR(CPU* cpu, OCInfo* oci);
 
 /* Jumps and calls */
-void cpu_JMP(CPU* cpu, uint16_t address);
-void cpu_JSR(CPU* cpu, uint16_t address);
-void cpu_RTS(CPU* cpu, uint16_t address);
+void cpu_JMP(CPU* cpu, OCInfo* oci);
+void cpu_JSR(CPU* cpu, OCInfo* oci);
+void cpu_RTS(CPU* cpu, OCInfo* oci);
 
 /* Conditional branches */
-void cpu_BCC(CPU* cpu, uint16_t address);
-void cpu_BCS(CPU* cpu, uint16_t address);
-void cpu_BEQ(CPU* cpu, uint16_t address);
-void cpu_BMI(CPU* cpu, uint16_t address);
-void cpu_BNE(CPU* cpu, uint16_t address);
-void cpu_BPL(CPU* cpu, uint16_t address);
-void cpu_BVC(CPU* cpu, uint16_t address);
-void cpu_BVS(CPU* cpu, uint16_t address);
+void cpu_BCC(CPU* cpu, OCInfo* oci);
+void cpu_BCS(CPU* cpu, OCInfo* oci);
+void cpu_BEQ(CPU* cpu, OCInfo* oci);
+void cpu_BMI(CPU* cpu, OCInfo* oci);
+void cpu_BNE(CPU* cpu, OCInfo* oci);
+void cpu_BPL(CPU* cpu, OCInfo* oci);
+void cpu_BVC(CPU* cpu, OCInfo* oci);
+void cpu_BVS(CPU* cpu, OCInfo* oci);
 
 /* Status flag changes */
-void cpu_CLC(CPU* cpu, uint16_t address);
-void cpu_CLD(CPU* cpu, uint16_t address);
-void cpu_CLI(CPU* cpu, uint16_t address);
-void cpu_CLV(CPU* cpu, uint16_t address);
-void cpu_SEC(CPU* cpu, uint16_t address);
-void cpu_SED(CPU* cpu, uint16_t address);
-void cpu_SEI(CPU* cpu, uint16_t address);
+void cpu_CLC(CPU* cpu, OCInfo* oci);
+void cpu_CLD(CPU* cpu, OCInfo* oci);
+void cpu_CLI(CPU* cpu, OCInfo* oci);
+void cpu_CLV(CPU* cpu, OCInfo* oci);
+void cpu_SEC(CPU* cpu, OCInfo* oci);
+void cpu_SED(CPU* cpu, OCInfo* oci);
+void cpu_SEI(CPU* cpu, OCInfo* oci);
 
 /* System */
-void cpu_BRK(CPU* cpu, uint16_t address); /*TODO: brk (sort of) HAS AN OPERAND (second byte is padding)*/
-void cpu_NOP(CPU* cpu, uint16_t address);
-void cpu_RTI(CPU* cpu, uint16_t address);
-void cpu_KIL(CPU* cpu, uint16_t address);
+void cpu_BRK(CPU* cpu, OCInfo* oci); /*TODO: brk (sort of) HAS AN OPERAND (second byte is padding)*/
+void cpu_NOP(CPU* cpu, OCInfo* oci);
+void cpu_RTI(CPU* cpu, OCInfo* oci);
+void cpu_KIL(CPU* cpu, OCInfo* oci);
 
-static void (*opcodes[256])(CPU*, uint16_t) = 
+static void (*opcodes[256])(CPU* cpu, OCInfo* oci) = 
 {
 	cpu_BRK, cpu_ORA, cpu_KIL, cpu_NOP, cpu_NOP, cpu_ORA, cpu_ASL, cpu_NOP, 
 	cpu_PHP, cpu_ORA, cpu_ASL, cpu_NOP, cpu_NOP, cpu_ORA, cpu_ASL, cpu_NOP, 
@@ -239,24 +261,6 @@ static void (*opcodes[256])(CPU*, uint16_t) =
 	cpu_BEQ, cpu_SBC, cpu_KIL, cpu_NOP, cpu_NOP, cpu_SBC, cpu_INC, cpu_NOP, 
 	cpu_SED, cpu_SBC, cpu_NOP, cpu_NOP, cpu_NOP, cpu_SBC, cpu_INC, cpu_NOP
 };
-
-typedef enum
-{
-	mNUL,	/* null (undefined opcodes. may implement later) */
-	mIMP,	/* implied */
-	mACC,	/* accumulator */
-	mIMM,	/* immediate */
-	mZPG,	/* zero page */
-	mZPX,	/* zero page, x-indexed */
-	mZPY,	/* zero page, y-indexed */
-	mREL,	/* relative */
-	mABS,	/* absolute */
-	mABX,	/* absolute, x-indexed */
-	mABY,	/* absolute, y-indexed */
-	mIND,	/* indirect */
-	mXID,	/* x-indexed, indirect */
-	mIDY,	/* indirect, y-indexed */
-} mode;
 
 static mode modes[256] =
 {

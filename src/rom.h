@@ -9,7 +9,7 @@
 
 /* TODO: ERROR CHECKING */
 
-/* iNES header. (defined at http://fms.komkon.org/EMUL8/NES.html#LABM
+/* iNES header. (from http://fms.komkon.org/EMUL8/NES.html#LABM)
 
 Byte     Contents
 ---------------------------------------------------------------------------
@@ -47,7 +47,7 @@ typedef struct
 	unsigned char reserved[6];	/* should be zeros */
 } ROM_Header;
 
-int rom_parse(FILE* rom, ROM_Header* header);
+int rom_parse(char* path, ROM_Header* header);
 
 
 #endif
