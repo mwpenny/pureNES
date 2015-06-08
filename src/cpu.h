@@ -4,6 +4,7 @@
 #define CPU_H
 
 #include <stdint.h>
+#include <stdio.h>
 #include "memory.h"
 
 /*
@@ -140,6 +141,7 @@ typedef struct
 	uint16_t operand;
 } OCInfo;
 
+void cpu_tick(CPU* cpu, FILE* log);
 void cpu_reset(CPU* cpu);
 
 /*** TODO: cycle counting ***/
@@ -260,6 +262,62 @@ static void (*opcodes[256])(CPU* cpu, OCInfo* oci) =
 	cpu_INX, cpu_SBC, cpu_NOP, cpu_NOP, cpu_CPX, cpu_SBC, cpu_INC, cpu_NOP, 
 	cpu_BEQ, cpu_SBC, cpu_KIL, cpu_NOP, cpu_NOP, cpu_SBC, cpu_INC, cpu_NOP, 
 	cpu_SED, cpu_SBC, cpu_NOP, cpu_NOP, cpu_NOP, cpu_SBC, cpu_INC, cpu_NOP
+};
+
+static char* oc_names[256] = 
+{
+	"BRK", "ORA", "KIL", "NOP", "NOP", "ORA", "ASL", "NOP",
+	"PHP", "ORA", "ASL", "NOP", "NOP", "ORA", "ASL", "NOP",
+	"BPL", "ORA", "KIL", "NOP", "NOP", "ORA", "ASL", "NOP",
+	"CLC", "ORA", "NOP", "NOP", "NOP", "ORA", "ASL", "NOP",
+	"JSR", "AND", "KIL", "NOP", "BIT", "AND", "ROL", "NOP",
+	"PLP", "AND", "ROL", "NOP", "BIT", "AND", "ROL", "NOP",
+	"BMI", "AND", "KIL", "NOP", "NOP", "AND", "ROL", "NOP",
+	"SEC", "AND", "NOP", "NOP", "NOP", "AND", "ROL", "NOP",
+	"RTI", "EOR", "KIL", "NOP", "NOP", "EOR", "LSR", "NOP",
+	"PHA", "EOR", "LSR", "NOP", "JMP", "EOR", "LSR", "NOP",
+	"BVC", "EOR", "KIL", "NOP", "NOP", "EOR", "LSR", "NOP",
+	"CLI", "EOR", "NOP", "NOP", "NOP", "EOR", "LSR", "NOP",
+	"RTS", "ADC", "KIL", "NOP", "NOP", "ADC", "ROR", "NOP",
+	"PLA", "ADC", "ROR", "NOP", "JMP", "ADC", "ROR", "NOP",
+	"BVS", "ADC", "KIL", "NOP", "NOP", "ADC", "ROR", "NOP",
+	"SEI", "ADC", "NOP", "NOP", "NOP", "ADC", "ROR", "NOP",
+	"NOP", "STA", "NOP", "NOP", "STY", "STA", "STX", "NOP",
+	"DEY", "NOP", "TXA", "NOP", "STY", "STA", "STX", "NOP",
+	"BCC", "STA", "KIL", "NOP", "STY", "STA", "STX", "NOP",
+	"TYA", "STA", "TXS", "NOP", "NOP", "STA", "NOP", "NOP",
+	"LDY", "LDA", "LDX", "NOP", "LDY", "LDA", "LDX", "NOP",
+	"TAY", "LDA", "TAX", "NOP", "LDY", "LDA", "LDX", "NOP",
+	"BCS", "LDA", "KIL", "NOP", "LDY", "LDA", "LDX", "NOP",
+	"CLV", "LDA", "TSX", "NOP", "LDY", "LDA", "LDX", "NOP",
+	"CPY", "CMP", "NOP", "NOP", "CPY", "CMP", "DEC", "NOP",
+	"INY", "CMP", "DEX", "NOP", "CPY", "CMP", "DEC", "NOP",
+	"BNE", "CMP", "KIL", "NOP", "NOP", "CMP", "DEC", "NOP",
+	"CLD", "CMP", "NOP", "NOP", "NOP", "CMP", "DEC", "NOP",
+	"CPX", "SBC", "NOP", "NOP", "CPX", "SBC", "INC", "NOP",
+	"INX", "SBC", "NOP", "NOP", "CPX", "SBC", "INC", "NOP",
+	"BEQ", "SBC", "KIL", "NOP", "NOP", "SBC", "INC", "NOP",
+	"SED", "SBC", "NOP", "NOP", "NOP", "SBC", "INC", "NOP"
+};
+
+static uint8_t oc_sizes[256] = 
+{
+	1, 2, 0, 0, 2, 2, 2, 0, 1, 2, 1, 0, 3, 3, 3, 0,
+	2, 2, 0, 0, 2, 2, 2, 0, 1, 3, 1, 0, 3, 3, 3, 0,
+	3, 2, 0, 0, 2, 2, 2, 0, 1, 2, 1, 0, 3, 3, 3, 0,
+	2, 2, 0, 0, 2, 2, 2, 0, 1, 3, 1, 0, 3, 3, 3, 0,
+	1, 2, 0, 0, 2, 2, 2, 0, 1, 2, 1, 0, 3, 3, 3, 0,
+	2, 2, 0, 0, 2, 2, 2, 0, 1, 3, 1, 0, 3, 3, 3, 0,
+	1, 2, 0, 0, 2, 2, 2, 0, 1, 2, 1, 0, 3, 3, 3, 0,
+	2, 2, 0, 0, 2, 2, 2, 0, 1, 3, 1, 0, 3, 3, 3, 0,
+	2, 2, 0, 0, 2, 2, 2, 0, 1, 0, 1, 0, 3, 3, 3, 0,
+	2, 2, 0, 0, 2, 2, 2, 0, 1, 3, 1, 0, 0, 3, 0, 0,
+	2, 2, 2, 0, 2, 2, 2, 0, 1, 2, 1, 0, 3, 3, 3, 0,
+	2, 2, 0, 0, 2, 2, 2, 0, 1, 3, 1, 0, 3, 3, 3, 0,
+	2, 2, 0, 0, 2, 2, 2, 0, 1, 2, 1, 0, 3, 3, 3, 0,
+	2, 2, 0, 0, 2, 2, 2, 0, 1, 3, 1, 0, 3, 3, 3, 0,
+	2, 2, 0, 0, 2, 2, 2, 0, 1, 2, 1, 0, 3, 3, 3, 0,
+	2, 2, 0, 0, 2, 2, 2, 0, 1, 3, 1, 0, 3, 3, 3, 0
 };
 
 static mode modes[256] =

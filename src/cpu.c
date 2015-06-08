@@ -24,12 +24,10 @@
 */
 
 /* TODO: INDIRECT JUMP BUG?*/
-void cpu_get_oci(CPU* cpu, uint8_t* opcode, OCInfo* oci)
+void cpu_get_oc_operand(CPU* cpu, OCInfo* oci)
 {
-	oci->opcode = *opcode;
-
 	/* interpret opcode operand based on addressing mode */
-	switch (modes[*opcode])
+	switch (modes[oci->opcode])
 	{
 	case mNUL:
 	case mIMP:
@@ -40,42 +38,50 @@ void cpu_get_oci(CPU* cpu, uint8_t* opcode, OCInfo* oci)
 		oci->operand = cpu->pc+1;
 		break;
 	case mZPG:
-		oci->operand = opcode[1] & 0xFF;
+		oci->operand = memory_get(cpu->pc+1) % 0xFF;
 		break;
 	case mZPX:
-		oci->operand = (opcode[1] + cpu->x) % 0xFF;
+		oci->operand = (memory_get(cpu->pc+1) + cpu->x) % 0xFF;
 		break;
 	case mZPY:
-		oci->operand = (opcode[1] + cpu->y) % 0xFF;
+		oci->operand = (memory_get(cpu->pc+1) + cpu->y) % 0xFF;
 		break;
 	case mREL:
-		oci->operand = cpu->pc + opcode[1];
+	{
+		uint16_t ofs = memory_get(cpu->pc+1);
+		oci->operand = cpu->pc + 2;
+		oci->operand += ofs & 0x80 ? (ofs - 0x100) : ofs; /* account for negative offset */
 		break;
+	}
 	case mABS:
-		oci->operand = opcode[1] & (opcode[2] << 8);
+		oci->operand = memory_get16(cpu->pc+1);
 		break;
 	case mABX:
-		oci->operand = (opcode[1] & (opcode[2] << 8)) + cpu->x;
+		oci->operand = memory_get16(cpu->pc+1) + cpu->x;
 		break;
 	case mABY:
-		oci->operand = (opcode[1] & (opcode[2] << 8)) + cpu->y;
+		oci->operand = memory_get16(cpu->pc+1) + cpu->y;
 		break;
 	case mIND:
-		oci->operand = memory_get((opcode[1] & (opcode[2] << 8)));
+		oci->operand = memory_get16(memory_get16(cpu->pc+1));
 		break;
 	case mXID:
-		oci->operand = memory_get(((opcode[1] & (opcode[2] << 8)) + cpu->x) % 0xFF);
+		oci->operand = memory_get16((memory_get(cpu->pc+1) + cpu->x) % 0xFF);
 		break;
 	case mIDY:
-		oci->operand = (memory_get(opcode[1] & (opcode[2] << 8)) + cpu->y) % 0xFF;
+		oci->operand = (memory_get16(cpu->pc+1) + cpu->y) % 0xFF;
 		break;
 	}
 }
-
-void exec(CPU* cpu, uint8_t* opcode)
+#include <stdio.h>
+void cpu_tick(CPU* cpu, FILE* log)
 {
 	OCInfo oci;
-	cpu_get_oci(cpu, opcode, &oci);
+	oci.opcode = memory_get(cpu->pc);
+	cpu_get_oc_operand(cpu, &oci);
+	/* fprintf(log, "PC:%x\tOPCODE:%s\tOPERAND:%x\tBYTES:%x\n", cpu->pc, oc_names[oci.opcode], oci.operand, oc_sizes[oci.opcode]); */
+	printf("PC:%x\tOPCODE:%s\tOPERAND:%x\tBYTES:%x\n", cpu->pc, oc_names[oci.opcode], oci.operand, oc_sizes[oci.opcode]);
+	cpu->pc += oc_sizes[oci.opcode];
 	opcodes[oci.opcode](cpu, &oci);
 }
 
@@ -93,7 +99,7 @@ void cpu_reset(CPU* cpu)
 	/* push p */
 	memory_set(0x100 | cpu->sp--, cpu->p);
 
-	/* sp should be 0xFD */
+	/* sp should now be 0xFD */
 
 	/* jump to reset vector */
 	cpu->pc = memory_get16(0xFFFC);

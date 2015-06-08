@@ -17,10 +17,10 @@
   0xFFFC/0xFFFD: reset handler
   0xFFFE/0xFFFF: IRQ/BRK handler
 */
-uint8_t* memory_map(uint16_t addr)
+uint8_t* memory_get_mapped(uint16_t addr)
 {
 	if (addr < 0x2000)
-		return &memory[addr % 2048];
+		return &ram[addr % 2048];
 	else if (addr < 0x4000);
 	/* return ppu_registers[addr % 8]; */
 	else if (addr < 0x4020);
@@ -29,22 +29,31 @@ uint8_t* memory_map(uint16_t addr)
 	/* return expansion_rom[addr]; */
 	else if (addr < 0x8000);
 	/* return sram[addr]; */
-	else if (addr < 0x10000);
-	/* return rom[addr]; */
+	else
+		return &rom[(addr - 0x8000) % rom_size]; /* mirror if only one bank */
+}
+
+void memory_map_rom(uint8_t* rom_addr, uint32_t size)
+{
+	rom = rom_addr;
+	rom_size = size;
 }
 
 uint8_t memory_get(uint16_t addr)
 {
-	return *memory_map(addr);
+	if (addr >= 0x2000 && addr < 0x8000) return 0; /* TODO: remove after mapping fully implemented */
+	return *memory_get_mapped(addr);
 }
 
 uint16_t memory_get16(uint16_t addr)
 {
-	return *memory_map(addr) | (*memory_map(addr+1) << 8);
+	if (addr >= 0x2000 && addr < 0x8000) return 0; /* TODO: remove after mapping fully implemented */
+	return *memory_get_mapped(addr) | (*memory_get_mapped(addr+1) << 8);
 }
 
 void memory_set(uint16_t addr, uint8_t val)
 {
 	/* TODO: disallow writing into read-only memory */
-	*memory_map(addr) = val;
+	if (addr >= 0x2000 && addr < 0x8000) return; /* TODO: remove after mapping fully implemented */
+	*memory_get_mapped(addr) = val;
 }
