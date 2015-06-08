@@ -7,6 +7,17 @@
 #include <stdio.h>
 #include "memory.h"
 
+#define ADDR_RESET 0xFFFC
+#define ADDR_BRK 0xFFFE
+
+#define MASK_C 0x01
+#define MASK_Z 0x02
+#define MASK_I 0x04
+#define MASK_D 0x08
+#define MASK_B 0x10
+#define MASK_V 0x40
+#define MASK_N 0x80
+
 typedef struct
 {
 	uint16_t pc;		/* program counter */ /* int may be faster */
@@ -39,7 +50,6 @@ void amode_XID(CPU* cpu, OCInfo* oci);
 void amode_IDY(CPU* cpu, OCInfo* oci);
 
 /*** TODO: cycle counting ***/
-/*** TODO: reuse functions ***/
 /*** TODO: make static/inline? ***/
 
 /* Load/store operations */

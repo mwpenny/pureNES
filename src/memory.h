@@ -12,6 +12,7 @@ void memory_map_rom(uint8_t* rom_addr, uint32_t size);
 
 uint8_t memory_get(uint16_t addr);
 uint16_t memory_get16(uint16_t addr);
+uint16_t memory_get16_ind(uint16_t addr);
 void memory_set(uint16_t addr, uint8_t val);
 
 #endif

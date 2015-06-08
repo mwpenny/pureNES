@@ -51,6 +51,16 @@ uint16_t memory_get16(uint16_t addr)
 	return *memory_get_mapped(addr) | (*memory_get_mapped(addr+1) << 8);
 }
 
+uint16_t memory_get16_ind(uint16_t addr)
+{
+	if (addr >= 0x2000 && addr < 0x8000) return 0; /* TODO: remove after mapping fully implemented */
+
+	/* the 6502 doesn't handle page boundary crosses for indirect addressing properly
+	   e.g. JMP ($80FF) will fetch the high byte from $8000, NOT $8100! */
+	uint16_t hi_addr = (addr & 0xFF00) | (uint8_t)((addr & 0xFF)+1);
+	return *memory_get_mapped(addr) | (*memory_get_mapped(hi_addr) << 8);
+}
+
 void memory_set(uint16_t addr, uint8_t val)
 {
 	/* TODO: disallow writing into read-only memory */

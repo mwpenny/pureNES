@@ -1,28 +1,5 @@
 #include "cpu.h"
 
-
-/* TODO: USE THESE
-
-#define SET_CRY(x)	x | 0x01
-#define SET_ZRO(x)	x | 0x02
-#define SET_INT(x)	x | 0x04
-#define SET_DEC(x)	x | 0x08
-#define SET_BRK(x)	x | 0x10
-#define SET_NUL(x)	x | 0x20
-#define SET_OVR(x)	x | 0x40
-#define SET_NEG(x)	x | 0x80
-
-#define CLR_CRY(x)	x & 0xFE
-#define CLR_ZER(x)	x & 0xFD
-#define CLR_INT(x)	x & 0xFB
-#define CLR_DEC(x)	x & 0xF7
-#define CLR_BRK(x)	x & 0xEF
-#define CLR_NUL(x)	x & 0xDF
-#define CLR_OVR(x)	x & 0xBF
-#define CLR_NEG(x)	x & 0x7F
-
-*/
-
 /*** Addressing mode handlers ***/
 void amode_NUL(CPU* cpu, OCInfo* oci)
 {
@@ -53,7 +30,7 @@ void amode_REL(CPU* cpu, OCInfo* oci)
 {
 	uint16_t ofs = memory_get(cpu->pc+1);
 	oci->operand = cpu->pc + 2;
-	oci->operand += ofs & 0x80 ? (ofs - 0x100) : ofs; /* account for negative offset */
+	oci->operand += ofs & MASK_N ? (ofs - 0x100) : ofs; /* account for negative offset */
 	++cpu->pc;
 }
 void amode_ABS(CPU* cpu, OCInfo* oci)
@@ -74,17 +51,17 @@ void amode_ABY(CPU* cpu, OCInfo* oci)
 /* TODO: INDIRECT JUMP BUG?*/
 void amode_IND(CPU* cpu, OCInfo* oci)
 {
-	oci->operand = memory_get16(memory_get16(cpu->pc+1));
+	oci->operand = memory_get16_ind(memory_get16(cpu->pc+1));
 	cpu->pc += 2;
 }
 void amode_XID(CPU* cpu, OCInfo* oci)
 {
-	oci->operand = memory_get16((memory_get(cpu->pc+1) + cpu->x) % 0xFF);
+	oci->operand = memory_get16_ind((memory_get(cpu->pc+1) + cpu->x) % 0xFF);
 	++cpu->pc;
 }
 void amode_IDY(CPU* cpu, OCInfo* oci)
 {
-	oci->operand = (memory_get16(cpu->pc+1) + cpu->y) % 0xFF;
+	oci->operand = (memory_get16_ind(cpu->pc+1) + cpu->y) % 0xFF;
 	cpu->pc += 2;
 }
 
@@ -103,9 +80,9 @@ void cpu_tick(CPU* cpu, FILE* log)
 
 void cpu_reset(CPU* cpu)
 {
-	cpu->p = 0x34; /* unused, break, and IRQ disable flags (0b00110100) */
+	cpu->p = 0x20 | MASK_B | MASK_I; /* unused, break, and IRQ disable flags */
 	cpu->a = cpu->x = cpu->y = 0;
-	cpu->sp = 0x00;
+	cpu->sp = 0;
 
 	/* TODO: don't actually push anything? */
 	/* push pc */
@@ -113,12 +90,12 @@ void cpu_reset(CPU* cpu)
 	memory_set(0x100 | cpu->sp--, (cpu->pc) & 0xFF);
 
 	/* push p */
-	memory_set(0x100 | cpu->sp--, cpu->p);
+	cpu_PHP(cpu, NULL);
 
 	/* sp should now be 0xFD */
 
 	/* jump to reset vector */
-	cpu->pc = memory_get16(0xFFFC);
+	cpu->pc = memory_get16(ADDR_RESET);
 
 
 	/* TODO: init memory */
@@ -128,13 +105,12 @@ void cpu_reset(CPU* cpu)
 
 void cpu_chk_aflags(CPU* cpu, uint8_t val)
 {
-	/* negative */
-	if (val & 0x80) cpu->p |= 0x80;
-	else cpu->p &= 0x7F;
+	/* set/clear zero and negative flags */
+	if (val & MASK_Z) cpu->p |= MASK_Z;
+	else cpu->p &= ~MASK_Z;
 
-	/* zero */
-	if (!val) cpu->p |= 0x02;
-	else cpu->p &= 0xFD;
+	if (val & MASK_N) cpu->p |= MASK_N;
+	else cpu->p &= ~MASK_N;
 }
 
 /*** Load/store operations ***/
@@ -277,23 +253,26 @@ void cpu_ORA(CPU* cpu, OCInfo* oci)
 /* BIT - bit test with mask pattern in accumulator */
 void cpu_BIT(CPU* cpu, OCInfo* oci) /* TODO: without branching? */
 {
-	if ((cpu->a & memory_get(oci->operand))) cpu->p &= 0xFD; /* zero flag */
-	else cpu->p |= 0x02;
-	cpu->p &= 0x3F; /* clear bits 6 and 7 */
-	cpu->p |= (memory_get(oci->operand) & 0xC0); /* copy bits 6 and 7 from the memory location */
+	/* clear zero flag if register a has a mask bit set */
+	if ((cpu->a & memory_get(oci->operand))) cpu->p &= ~MASK_Z;
+	else cpu->p |= MASK_Z;
+
+	cpu->p &= ~(MASK_N | MASK_N); /* clear bits 6 and 7 */
+	cpu->p |= (memory_get(oci->operand) & (MASK_N | MASK_N)); /* copy bits 6 and 7 from the memory location */
 }
 
 
 /*** Arithmetic operations ***/
+/* TODO: BCD MODE */
 
 /* ADC - add with carry to accumulator */
 void cpu_ADC(CPU* cpu, OCInfo* oci)
 {
-	long val = cpu->a + memory_get(oci->operand) + (cpu->p & 0x01); /* long --> min 32 bits */
+	long val = cpu->a + memory_get(oci->operand) + (cpu->p & MASK_C); /* long --> min 32 bits */
 	if (val & 0x100) cpu_SEC(cpu, oci);
 	else cpu_CLC(cpu, oci);
 
-	if ((~(cpu->a ^ memory_get(oci->operand)) & (cpu->a ^ val)) & 0x80)
+	if ((~(cpu->a ^ memory_get(oci->operand)) & (cpu->a ^ val)) & MASK_N)
 		cpu->p |= 0x40;
 	else
 		cpu_CLV(cpu, oci);
@@ -387,45 +366,49 @@ void cpu_DEY(CPU* cpu, OCInfo* oci)
 /* ASL - arithmetic shift left */
 void cpu_ASL(CPU* cpu, OCInfo* oci)
 {
-	/* address == 0 --> use accumulator value */
-	uint8_t val = !oci->operand ? cpu->a : memory_get(oci->operand);
-	cpu->p |= (val & 0x80) >> 7;
-	val <<= 1;
-	cpu_chk_aflags(cpu, cpu->a);
+	/* address == 0 --> use accumulator */
+	uint8_t* loc = ~oci->operand ? &cpu->a : memory_get_mapped(oci->operand);
+	cpu_CLC(cpu, NULL);
+	cpu->p |= (*loc & 0x80) >> 7;
+	*loc <<= 1;
+	cpu_chk_aflags(cpu, *loc);
 }
 
 /* LSR - logical shift right */
 void cpu_LSR(CPU* cpu, OCInfo* oci)
 {
-	/* address == 0 --> use accumulator value */
-	uint8_t val = !oci->operand ? cpu->a : memory_get(oci->operand);
-	cpu->p |= val & 0x01;
-	val >>= 1;
-	cpu_chk_aflags(cpu, cpu->a);
+	/* address == 0 --> use accumulator */
+	uint8_t* loc = ~oci->operand ? &cpu->a : memory_get_mapped(oci->operand);
+	cpu_CLC(cpu, NULL);
+	cpu->p |= *loc & MASK_C;
+	*loc >>= 1;
+	cpu_chk_aflags(cpu, *loc);
 }
 
 /* ROL - rotate left */
 void cpu_ROL(CPU* cpu, OCInfo* oci)
 {
-	/* address == 0 --> use accumulator value */
-	uint8_t val = !oci->operand ? cpu->a : memory_get(oci->operand);
-	uint8_t carry = cpu->p & 0x01;
-	cpu->p |= (val & 0x80) >> 7;
-	val <<= 1;
-	val |= carry;
-	cpu_chk_aflags(cpu, cpu->a);
+	/* address == 0 --> use accumulator */
+	uint8_t* loc = ~oci->operand ? &cpu->a : memory_get_mapped(oci->operand);
+	uint8_t carry = cpu->p & MASK_C;
+	cpu_CLC(cpu, NULL);
+	cpu->p |= (*loc & 0x80) >> 7;
+	*loc <<= 1;
+	*loc |= carry;
+	cpu_chk_aflags(cpu, *loc);
 }
 
 /* ROR - rotate right */
 void cpu_ROR(CPU* cpu, OCInfo* oci)
 {
-	/* address == 0 --> use accumulator value */
-	uint8_t val = !oci->operand ? cpu->a : memory_get(oci->operand);
-	uint8_t carry = cpu->p & 0x01;
-	cpu->p |= val & 0x01;
-	val >>= 1;
-	val |= carry << 7;
-	cpu_chk_aflags(cpu, cpu->a);
+	/* address == 0 --> use accumulator */
+	uint8_t* loc = ~oci->operand ? &cpu->a : memory_get_mapped(oci->operand);
+	uint8_t carry = cpu->p & MASK_C;
+	cpu_CLC(cpu, NULL);
+	cpu->p |= *loc & MASK_C;
+	*loc >>= 1;
+	*loc |= carry << 7;
+	cpu_chk_aflags(cpu, *loc);
 }
 
 
@@ -448,7 +431,8 @@ void cpu_JSR(CPU* cpu, OCInfo* oci)
 /* RTS - return from subroutine */
 void cpu_RTS(CPU* cpu, OCInfo* oci)
 {
-	cpu->pc = (memory_get(0x100 | ++cpu->sp) | (memory_get(0x100 | ++cpu->sp) << 8)) + 1;
+	cpu->pc = memory_get16(0x100 | ++cpu->sp) + 1;
+	++cpu->sp;
 }
 
 
@@ -457,49 +441,49 @@ void cpu_RTS(CPU* cpu, OCInfo* oci)
 /* BCC - branch if carry flag clear */
 void cpu_BCC(CPU* cpu, OCInfo* oci)
 {
-	if (!(cpu->p & 0x01)) cpu->pc = oci->operand;
+	if (~(cpu->p & MASK_C)) cpu->pc = oci->operand;
 }
 
 /* BCS - branch if carry flag set */
 void cpu_BCS(CPU* cpu, OCInfo* oci)
 {
-	if (cpu->p & 0x01) cpu->pc = oci->operand;
+	if (cpu->p & MASK_C) cpu->pc = oci->operand;
 }
 
 /* BEQ - branch if zero flag set */
 void cpu_BEQ(CPU* cpu, OCInfo* oci)
 {
-	if (cpu->p & 0x02) cpu->pc = oci->operand;
+	if (cpu->p & MASK_Z) cpu->pc = oci->operand;
 }
 
 /* BMI - branch if negative flag set */
 void cpu_BMI(CPU* cpu, OCInfo* oci)
 {
-	if (cpu->p & 0x80) cpu->pc = oci->operand;
+	if (cpu->p & MASK_N) cpu->pc = oci->operand;
 }
 
 /* BNE - branch if zero flag clear */
 void cpu_BNE(CPU* cpu, OCInfo* oci)
 {
-	if (!(cpu->p & 0x02)) cpu->pc = oci->operand;
+	if (~(cpu->p & MASK_Z)) cpu->pc = oci->operand;
 }
 
 /* BPL - branch if negative flag set */
 void cpu_BPL(CPU* cpu, OCInfo* oci)
 {
-	if (!(cpu->p & 0x80)) cpu->pc = oci->operand;
+	if (~(cpu->p & MASK_N)) cpu->pc = oci->operand;
 }
 
 /* BVC - branch if overflow flag clear */
 void cpu_BVC(CPU* cpu, OCInfo* oci)
 {
-	if (!(cpu->p & 0x40)) cpu->pc = oci->operand;
+	if (~(cpu->p & MASK_C)) cpu->pc = oci->operand;
 }
 
 /* BVC - branch if overflow flag set */
 void cpu_BVS(CPU* cpu, OCInfo* oci)
 {
-	if (cpu->p & 0x40) cpu->pc = oci->operand;
+	if (cpu->p & MASK_V) cpu->pc = oci->operand;
 }
 
 
@@ -508,43 +492,43 @@ void cpu_BVS(CPU* cpu, OCInfo* oci)
 /* CLC - clear carry flag */
 void cpu_CLC(CPU* cpu, OCInfo* oci)
 {
-	cpu->p &= 0xFE;
+	cpu->p &= ~MASK_C;
 }
 
 /* CLD - clear decimal mode flag */
 void cpu_CLD(CPU* cpu, OCInfo* oci)
 {
-	cpu->p &= 0xF7;
+	cpu->p &= ~MASK_D;
 }
 
 /* CLI - clear interrupt disable flag */
 void cpu_CLI(CPU* cpu, OCInfo* oci)
 {
-	cpu->p &= 0xFB;
+	cpu->p &= ~MASK_I;
 }
 
 /* CLV - clear overflow flag */
 void cpu_CLV(CPU* cpu, OCInfo* oci)
 {
-	cpu->p &= 0xBF;
+	cpu->p &= ~MASK_V;
 }
 
 /* SEC - set carry flag */
 void cpu_SEC(CPU* cpu, OCInfo* oci)
 {
-	cpu->p |= 0x01;
+	cpu->p |= MASK_C;
 }
 
 /* SED - set decimal mode flag */
 void cpu_SED(CPU* cpu, OCInfo* oci)
 {
-	cpu->p |= 0x08;
+	cpu->p |= MASK_D;
 }
 
 /* SEI - set interrupt disable flag */
 void cpu_SEI(CPU* cpu, OCInfo* oci)
 {
-	cpu->p |= 0x04;
+	cpu->p |= MASK_I;
 }
 
 
@@ -557,7 +541,7 @@ void cpu_BRK(CPU* cpu, OCInfo* oci)
 	memory_set(0x100 | cpu->sp--, (cpu->pc) & 0xFF);
 	cpu_PHP(cpu, oci);
 	cpu_SEI(cpu, oci);
-	cpu->pc = memory_get16(0xFFFE);
+	cpu->pc = memory_get16(ADDR_BRK);
 }
 
 /* NOP - no operation */
