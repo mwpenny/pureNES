@@ -7,108 +7,6 @@
 #include <stdio.h>
 #include "memory.h"
 
-/*
-Opcodes:
-Source
-    http://www.thealmightyguru.com/Games/Hacking/Wiki/index.php?title=6502_Opcodes
-
-Hex 	Opcode 	Mode
-03 		
-04 		
-07 		
-0B 		
-0C 		
-0F 		
-13 		
-14 		
-17 		
-1A 		
-1B 		
-1C 		
-1F 		
-23 		
-27 		 	
-2B 		
-2F 		
-33 		
-34 		
-37 			
-3A 		
-3B 		
-3C 		
-3F 		
-43 		
-44 		
-47 		
-4B 		
-4F 		
-53 		
-54 		
-57 		
-5A 		
-5B 		
-5C 		
-5F 		
-63 		
-64 		
-67 		
-6B 		
-6F 		
-73 		
-74 		
-77 		
-7A 		
-7B 		
-7C 		
-7F 		
-80 		
-82 		
-83 		
-87 		
-89 		
-8B 		
-8F 		
-93 		
-97 		
-9B 		
-9C 		
-9E 		
-9F 		
-A3 		
-A7 		
-AB 		
-AF 		
-B3 		
-B7 		
-BB 		
-BF 		
-C2 		
-C3 		
-C7 		
-CB 		
-CF 		
-D3 		
-D4 		
-D7 		
-DA 		
-DB 		
-DC 		
-DF 		
-E2 		
-E3 		
-E7 		
-EB 		
-EF 		
-F3 		
-F4 		
-F7 		
-FA 		
-FB 		
-FC 		
-FF 		*/
-
-
-
 typedef struct
 {
 	uint16_t pc;		/* program counter */ /* int may be faster */
@@ -116,24 +14,6 @@ typedef struct
 	uint8_t p;			/* processor flags */
 	uint8_t a, x, y;	/* registers */
 } CPU;
-
-typedef enum
-{
-	mNUL,	/* null (undefined opcodes. may implement later) */
-	mIMP,	/* implied */
-	mACC,	/* accumulator */
-	mIMM,	/* immediate */
-	mZPG,	/* zero page */
-	mZPX,	/* zero page, x-indexed */
-	mZPY,	/* zero page, y-indexed */
-	mREL,	/* relative */
-	mABS,	/* absolute */
-	mABX,	/* absolute, x-indexed */
-	mABY,	/* absolute, y-indexed */
-	mIND,	/* indirect */
-	mXID,	/* x-indexed, indirect */
-	mIDY,	/* indirect, y-indexed */
-} mode;
 
 typedef struct
 {
@@ -143,6 +23,20 @@ typedef struct
 
 void cpu_tick(CPU* cpu, FILE* log);
 void cpu_reset(CPU* cpu);
+
+/* Addressing mode handlers */
+void amode_NUL(CPU* cpu, OCInfo* oci);
+void amode_IMM(CPU* cpu, OCInfo* oci);
+void amode_ZPG(CPU* cpu, OCInfo* oci);
+void amode_ZPX(CPU* cpu, OCInfo* oci);
+void amode_ZPY(CPU* cpu, OCInfo* oci);
+void amode_REL(CPU* cpu, OCInfo* oci);
+void amode_ABS(CPU* cpu, OCInfo* oci);
+void amode_ABX(CPU* cpu, OCInfo* oci);
+void amode_ABY(CPU* cpu, OCInfo* oci);
+void amode_IND(CPU* cpu, OCInfo* oci);
+void amode_XID(CPU* cpu, OCInfo* oci);
+void amode_IDY(CPU* cpu, OCInfo* oci);
 
 /*** TODO: cycle counting ***/
 /*** TODO: reuse functions ***/
@@ -223,11 +117,14 @@ void cpu_SED(CPU* cpu, OCInfo* oci);
 void cpu_SEI(CPU* cpu, OCInfo* oci);
 
 /* System */
-void cpu_BRK(CPU* cpu, OCInfo* oci); /*TODO: brk (sort of) HAS AN OPERAND (second byte is padding)*/
+void cpu_BRK(CPU* cpu, OCInfo* oci); /*TODO: brk apparently (sort of) HAS AN OPERAND (second byte is padding)*/
 void cpu_NOP(CPU* cpu, OCInfo* oci);
 void cpu_RTI(CPU* cpu, OCInfo* oci);
+
+/* TODO: Undocumented instructions */
 void cpu_KIL(CPU* cpu, OCInfo* oci);
 
+/* Lookup tables */
 static void (*opcodes[256])(CPU* cpu, OCInfo* oci) = 
 {
 	cpu_BRK, cpu_ORA, cpu_KIL, cpu_NOP, cpu_NOP, cpu_ORA, cpu_ASL, cpu_NOP, 
@@ -300,60 +197,40 @@ static char* oc_names[256] =
 	"SED", "SBC", "NOP", "NOP", "NOP", "SBC", "INC", "NOP"
 };
 
-static uint8_t oc_sizes[256] = 
+static void (*amodes[256])(CPU* cpu, OCInfo* oci) = 
 {
-	1, 2, 0, 0, 2, 2, 2, 0, 1, 2, 1, 0, 3, 3, 3, 0,
-	2, 2, 0, 0, 2, 2, 2, 0, 1, 3, 1, 0, 3, 3, 3, 0,
-	3, 2, 0, 0, 2, 2, 2, 0, 1, 2, 1, 0, 3, 3, 3, 0,
-	2, 2, 0, 0, 2, 2, 2, 0, 1, 3, 1, 0, 3, 3, 3, 0,
-	1, 2, 0, 0, 2, 2, 2, 0, 1, 2, 1, 0, 3, 3, 3, 0,
-	2, 2, 0, 0, 2, 2, 2, 0, 1, 3, 1, 0, 3, 3, 3, 0,
-	1, 2, 0, 0, 2, 2, 2, 0, 1, 2, 1, 0, 3, 3, 3, 0,
-	2, 2, 0, 0, 2, 2, 2, 0, 1, 3, 1, 0, 3, 3, 3, 0,
-	2, 2, 0, 0, 2, 2, 2, 0, 1, 0, 1, 0, 3, 3, 3, 0,
-	2, 2, 0, 0, 2, 2, 2, 0, 1, 3, 1, 0, 0, 3, 0, 0,
-	2, 2, 2, 0, 2, 2, 2, 0, 1, 2, 1, 0, 3, 3, 3, 0,
-	2, 2, 0, 0, 2, 2, 2, 0, 1, 3, 1, 0, 3, 3, 3, 0,
-	2, 2, 0, 0, 2, 2, 2, 0, 1, 2, 1, 0, 3, 3, 3, 0,
-	2, 2, 0, 0, 2, 2, 2, 0, 1, 3, 1, 0, 3, 3, 3, 0,
-	2, 2, 0, 0, 2, 2, 2, 0, 1, 2, 1, 0, 3, 3, 3, 0,
-	2, 2, 0, 0, 2, 2, 2, 0, 1, 3, 1, 0, 3, 3, 3, 0
-};
-
-static mode modes[256] =
-{
-	mIMP, mXID, mNUL, mNUL, mNUL, mZPG, mZPG, mNUL,
-	mIMP, mIMM, mACC, mNUL, mNUL, mABS, mABS, mNUL,
-	mREL, mIDY, mNUL, mNUL, mNUL, mZPX, mZPX, mNUL,
-	mIMP, mABY, mNUL, mNUL, mNUL, mABX, mABX, mNUL,
-	mABS, mXID, mNUL, mNUL, mZPG, mZPG, mZPG, mNUL,
-	mIMP, mIMM, mACC, mNUL, mABS, mABS, mABS, mNUL,
-	mREL, mIDY, mNUL, mNUL, mNUL, mZPX, mZPX, mNUL,
-	mIMP, mABY, mNUL, mNUL, mNUL, mABX, mABX, mNUL,
-	mIMP, mXID, mNUL, mNUL, mNUL, mZPG, mZPG, mNUL,
-	mIMP, mIMM, mACC, mNUL, mABS, mABS, mABS, mNUL,
-	mREL, mIDY, mNUL, mNUL, mNUL, mZPX, mZPX, mNUL,
-	mIMP, mABY, mNUL, mNUL, mNUL, mABX, mABX, mNUL,
-	mIMP, mXID, mNUL, mNUL, mNUL, mZPG, mZPG, mNUL,
-	mIMP, mIMM, mACC, mNUL, mIND, mABS, mABS, mNUL,
-	mREL, mIDY, mNUL, mNUL, mNUL, mZPX, mZPX, mNUL,
-	mIMP, mABY, mNUL, mNUL, mNUL, mABX, mABX, mNUL,
-	mNUL, mXID, mNUL, mNUL, mZPG, mZPG, mZPG, mNUL,
-	mIMP, mNUL, mIMP, mNUL, mABS, mABS, mABS, mNUL,
-	mREL, mIDY, mNUL, mNUL, mZPX, mZPX, mZPY, mNUL,
-	mIMP, mABY, mIMP, mNUL, mNUL, mABX, mNUL, mNUL,
-	mIMM, mXID, mIMM, mNUL, mZPG, mZPG, mZPG, mNUL,
-	mIMP, mIMM, mIMP, mNUL, mABS, mABS, mABS, mNUL,
-	mREL, mIDY, mNUL, mNUL, mZPX, mZPX, mZPY, mNUL,
-	mIMP, mABY, mIMP, mNUL, mABX, mABX, mABY, mNUL,
-	mIMM, mXID, mNUL, mNUL, mZPG, mZPG, mZPG, mNUL,
-	mIMP, mIMM, mIMP, mNUL, mABS, mABS, mABS, mNUL,
-	mREL, mIDY, mNUL, mNUL, mNUL, mZPX, mZPX, mNUL,
-	mIMP, mABY, mNUL, mNUL, mNUL, mABX, mABX, mNUL,
-	mIMM, mXID, mNUL, mNUL, mZPG, mZPG, mZPG, mNUL,
-	mIMP, mIMM, mIMP, mNUL, mABS, mABS, mABS, mNUL,
-	mREL, mIDY, mNUL, mNUL, mNUL, mZPX, mZPX, mNUL,
-	mIMP, mABY, mNUL, mNUL, mNUL, mABX, mABX, mNUL
+	amode_NUL, amode_XID, amode_NUL, amode_NUL, amode_NUL, amode_ZPG, amode_ZPG, amode_NUL,
+	amode_NUL, amode_IMM, amode_NUL, amode_NUL, amode_NUL, amode_ABS, amode_ABS, amode_NUL,
+	amode_REL, amode_IDY, amode_NUL, amode_NUL, amode_NUL, amode_ZPX, amode_ZPX, amode_NUL,
+	amode_NUL, amode_ABY, amode_NUL, amode_NUL, amode_NUL, amode_ABX, amode_ABX, amode_NUL,
+	amode_ABS, amode_XID, amode_NUL, amode_NUL, amode_ZPG, amode_ZPG, amode_ZPG, amode_NUL,
+	amode_NUL, amode_IMM, amode_NUL, amode_NUL, amode_ABS, amode_ABS, amode_ABS, amode_NUL,
+	amode_REL, amode_IDY, amode_NUL, amode_NUL, amode_NUL, amode_ZPX, amode_ZPX, amode_NUL,
+	amode_NUL, amode_ABY, amode_NUL, amode_NUL, amode_NUL, amode_ABX, amode_ABX, amode_NUL,
+	amode_NUL, amode_XID, amode_NUL, amode_NUL, amode_NUL, amode_ZPG, amode_ZPG, amode_NUL,
+	amode_NUL, amode_IMM, amode_NUL, amode_NUL, amode_ABS, amode_ABS, amode_ABS, amode_NUL,
+	amode_REL, amode_IDY, amode_NUL, amode_NUL, amode_NUL, amode_ZPX, amode_ZPX, amode_NUL,
+	amode_NUL, amode_ABY, amode_NUL, amode_NUL, amode_NUL, amode_ABX, amode_ABX, amode_NUL,
+	amode_NUL, amode_XID, amode_NUL, amode_NUL, amode_NUL, amode_ZPG, amode_ZPG, amode_NUL,
+	amode_NUL, amode_IMM, amode_NUL, amode_NUL, amode_IND, amode_ABS, amode_ABS, amode_NUL,
+	amode_REL, amode_IDY, amode_NUL, amode_NUL, amode_NUL, amode_ZPX, amode_ZPX, amode_NUL,
+	amode_NUL, amode_ABY, amode_NUL, amode_NUL, amode_NUL, amode_ABX, amode_ABX, amode_NUL,
+	amode_NUL, amode_XID, amode_NUL, amode_NUL, amode_ZPG, amode_ZPG, amode_ZPG, amode_NUL,
+	amode_NUL, amode_NUL, amode_NUL, amode_NUL, amode_ABS, amode_ABS, amode_ABS, amode_NUL,
+	amode_REL, amode_IDY, amode_NUL, amode_NUL, amode_ZPX, amode_ZPX, amode_ZPY, amode_NUL,
+	amode_NUL, amode_ABY, amode_NUL, amode_NUL, amode_NUL, amode_ABX, amode_NUL, amode_NUL,
+	amode_IMM, amode_XID, amode_IMM, amode_NUL, amode_ZPG, amode_ZPG, amode_ZPG, amode_NUL,
+	amode_NUL, amode_IMM, amode_NUL, amode_NUL, amode_ABS, amode_ABS, amode_ABS, amode_NUL,
+	amode_REL, amode_IDY, amode_NUL, amode_NUL, amode_ZPX, amode_ZPX, amode_ZPY, amode_NUL,
+	amode_NUL, amode_ABY, amode_NUL, amode_NUL, amode_ABX, amode_ABX, amode_ABY, amode_NUL,
+	amode_IMM, amode_XID, amode_NUL, amode_NUL, amode_ZPG, amode_ZPG, amode_ZPG, amode_NUL,
+	amode_NUL, amode_IMM, amode_NUL, amode_NUL, amode_ABS, amode_ABS, amode_ABS, amode_NUL,
+	amode_REL, amode_IDY, amode_NUL, amode_NUL, amode_NUL, amode_ZPX, amode_ZPX, amode_NUL,
+	amode_NUL, amode_ABY, amode_NUL, amode_NUL, amode_NUL, amode_ABX, amode_ABX, amode_NUL,
+	amode_IMM, amode_XID, amode_NUL, amode_NUL, amode_ZPG, amode_ZPG, amode_ZPG, amode_NUL,
+	amode_NUL, amode_IMM, amode_NUL, amode_NUL, amode_ABS, amode_ABS, amode_ABS, amode_NUL,
+	amode_REL, amode_IDY, amode_NUL, amode_NUL, amode_NUL, amode_ZPX, amode_ZPX, amode_NUL,
+	amode_NUL, amode_ABY, amode_NUL, amode_NUL, amode_NUL, amode_ABX, amode_ABX, amode_NUL
 };
 
 #endif

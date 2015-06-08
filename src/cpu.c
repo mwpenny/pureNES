@@ -23,65 +23,81 @@
 
 */
 
-/* TODO: INDIRECT JUMP BUG?*/
-void cpu_get_oc_operand(CPU* cpu, OCInfo* oci)
+/*** Addressing mode handlers ***/
+void amode_NUL(CPU* cpu, OCInfo* oci)
 {
-	/* interpret opcode operand based on addressing mode */
-	switch (modes[oci->opcode])
-	{
-	case mNUL:
-	case mIMP:
-	case mACC:
-		oci->operand = 0;
-		break;
-	case mIMM:
-		oci->operand = cpu->pc+1;
-		break;
-	case mZPG:
-		oci->operand = memory_get(cpu->pc+1) % 0xFF;
-		break;
-	case mZPX:
-		oci->operand = (memory_get(cpu->pc+1) + cpu->x) % 0xFF;
-		break;
-	case mZPY:
-		oci->operand = (memory_get(cpu->pc+1) + cpu->y) % 0xFF;
-		break;
-	case mREL:
-	{
-		uint16_t ofs = memory_get(cpu->pc+1);
-		oci->operand = cpu->pc + 2;
-		oci->operand += ofs & 0x80 ? (ofs - 0x100) : ofs; /* account for negative offset */
-		break;
-	}
-	case mABS:
-		oci->operand = memory_get16(cpu->pc+1);
-		break;
-	case mABX:
-		oci->operand = memory_get16(cpu->pc+1) + cpu->x;
-		break;
-	case mABY:
-		oci->operand = memory_get16(cpu->pc+1) + cpu->y;
-		break;
-	case mIND:
-		oci->operand = memory_get16(memory_get16(cpu->pc+1));
-		break;
-	case mXID:
-		oci->operand = memory_get16((memory_get(cpu->pc+1) + cpu->x) % 0xFF);
-		break;
-	case mIDY:
-		oci->operand = (memory_get16(cpu->pc+1) + cpu->y) % 0xFF;
-		break;
-	}
+	/* handles null (undefined), implied, and accumulator addressing modes */
+	oci->operand = 0;
 }
+void amode_IMM(CPU* cpu, OCInfo* oci)
+{
+	oci->operand = cpu->pc+1;
+	++cpu->pc;
+}
+void amode_ZPG(CPU* cpu, OCInfo* oci)
+{
+	oci->operand = memory_get(cpu->pc+1) % 0xFF;
+	++cpu->pc;
+}
+void amode_ZPX(CPU* cpu, OCInfo* oci)
+{
+	oci->operand = (memory_get(cpu->pc+1) + cpu->x) % 0xFF;
+	++cpu->pc;
+}
+void amode_ZPY(CPU* cpu, OCInfo* oci)
+{
+	oci->operand = (memory_get(cpu->pc+1) + cpu->y) % 0xFF;
+	++cpu->pc;
+}
+void amode_REL(CPU* cpu, OCInfo* oci)
+{
+	uint16_t ofs = memory_get(cpu->pc+1);
+	oci->operand = cpu->pc + 2;
+	oci->operand += ofs & 0x80 ? (ofs - 0x100) : ofs; /* account for negative offset */
+	++cpu->pc;
+}
+void amode_ABS(CPU* cpu, OCInfo* oci)
+{
+	oci->operand = memory_get16(cpu->pc+1);
+	cpu->pc += 2;
+}
+void amode_ABX(CPU* cpu, OCInfo* oci)
+{
+	oci->operand = memory_get16(cpu->pc+1) + cpu->x;
+	cpu->pc += 2;
+}
+void amode_ABY(CPU* cpu, OCInfo* oci)
+{
+	oci->operand = memory_get16(cpu->pc+1) + cpu->y;
+	cpu->pc += 2;
+}
+/* TODO: INDIRECT JUMP BUG?*/
+void amode_IND(CPU* cpu, OCInfo* oci)
+{
+	oci->operand = memory_get16(memory_get16(cpu->pc+1));
+	cpu->pc += 2;
+}
+void amode_XID(CPU* cpu, OCInfo* oci)
+{
+	oci->operand = memory_get16((memory_get(cpu->pc+1) + cpu->x) % 0xFF);
+	++cpu->pc;
+}
+void amode_IDY(CPU* cpu, OCInfo* oci)
+{
+	oci->operand = (memory_get16(cpu->pc+1) + cpu->y) % 0xFF;
+	cpu->pc += 2;
+}
+
 #include <stdio.h>
 void cpu_tick(CPU* cpu, FILE* log)
 {
 	OCInfo oci;
 	oci.opcode = memory_get(cpu->pc);
-	cpu_get_oc_operand(cpu, &oci);
+	printf("%x\t%s ", cpu->pc, oc_names[oci.opcode]);
+	amodes[oci.opcode](cpu, &oci);
 	/* fprintf(log, "PC:%x\tOPCODE:%s\tOPERAND:%x\tBYTES:%x\n", cpu->pc, oc_names[oci.opcode], oci.operand, oc_sizes[oci.opcode]); */
-	printf("PC:%x\tOPCODE:%s\tOPERAND:%x\tBYTES:%x\n", cpu->pc, oc_names[oci.opcode], oci.operand, oc_sizes[oci.opcode]);
-	cpu->pc += oc_sizes[oci.opcode];
+	printf("$%x\n", oci.operand);
+	++cpu->pc;
 	opcodes[oci.opcode](cpu, &oci);
 }
 
@@ -555,7 +571,7 @@ void cpu_RTI(CPU* cpu, OCInfo* oci)
 }
 
 
-/*** Undocumented instructions ***/
+/*** TODO: Undocumented instructions ***/
 
 /* KIL - crash the processor */
 void cpu_KIL(CPU* cpu, OCInfo* oci)
