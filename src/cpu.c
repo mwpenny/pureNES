@@ -387,8 +387,8 @@ void cpu_DEY(CPU* cpu, OCInfo* oci)
 /* ASL - arithmetic shift left */
 void cpu_ASL(CPU* cpu, OCInfo* oci)
 {
-	/* opcode == 0x0A --> use accumulator value */
-	uint8_t val = oci->opcode == 0x0A ? cpu->a : memory_get(oci->operand);
+	/* address == 0 --> use accumulator value */
+	uint8_t val = !oci->operand ? cpu->a : memory_get(oci->operand);
 	cpu->p |= (val & 0x80) >> 7;
 	val <<= 1;
 	cpu_chk_aflags(cpu, cpu->a);
@@ -397,8 +397,8 @@ void cpu_ASL(CPU* cpu, OCInfo* oci)
 /* LSR - logical shift right */
 void cpu_LSR(CPU* cpu, OCInfo* oci)
 {
-	/* opcode == 0x0A --> use accumulator value */
-	uint8_t val = oci->opcode == 0x0A ? cpu->a : memory_get(oci->operand);
+	/* address == 0 --> use accumulator value */
+	uint8_t val = !oci->operand ? cpu->a : memory_get(oci->operand);
 	cpu->p |= val & 0x01;
 	val >>= 1;
 	cpu_chk_aflags(cpu, cpu->a);
@@ -407,8 +407,8 @@ void cpu_LSR(CPU* cpu, OCInfo* oci)
 /* ROL - rotate left */
 void cpu_ROL(CPU* cpu, OCInfo* oci)
 {
-	/* opcode == 0x0A --> use accumulator value */
-	uint8_t val = oci->opcode == 0x0A ? cpu->a : memory_get(oci->operand);
+	/* address == 0 --> use accumulator value */
+	uint8_t val = !oci->operand ? cpu->a : memory_get(oci->operand);
 	uint8_t carry = cpu->p & 0x01;
 	cpu->p |= (val & 0x80) >> 7;
 	val <<= 1;
@@ -419,8 +419,8 @@ void cpu_ROL(CPU* cpu, OCInfo* oci)
 /* ROR - rotate right */
 void cpu_ROR(CPU* cpu, OCInfo* oci)
 {
-	/* opcode == 0x0A --> use accumulator value */
-	uint8_t val = oci->opcode == 0x0A ? cpu->a : memory_get(oci->operand);
+	/* address == 0 --> use accumulator value */
+	uint8_t val = !oci->operand ? cpu->a : memory_get(oci->operand);
 	uint8_t carry = cpu->p & 0x01;
 	cpu->p |= val & 0x01;
 	val >>= 1;

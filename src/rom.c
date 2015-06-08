@@ -57,6 +57,9 @@ int main(int argc, char** argv)
 	fclose(rom);
 	memory_map_rom(rBanks, 16*head.rom_size*1024*sizeof(uint8_t));
 
+	puts("\nPress enter to start CPU emulation");
+	scanf("%c",&i);
+
 	cpu_reset(&cpu);
 
 	/* CPU update loop */
