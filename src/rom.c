@@ -3,8 +3,10 @@
 
 #include <stdlib.h>
 #include "cpu.h"
+#include "ppu.h"
 #include "rom.h"
 #include "mappers.h"
+#include <SDL.h>
 
 int rom_parse(FILE* rom, ROM_Header* header)
 {
@@ -18,9 +20,15 @@ int main(int argc, char** argv)
 	int i;
 	ROM_Header head;
 	CPU cpu;
+	PPU ppu;
 	unsigned char* rBanks;
+	unsigned char* vrBanks;
 	FILE* rom = fopen(argv[1], "rb");
 	FILE* log = fopen("cpu.log", "w");
+
+	SDL_Event se;
+	SDL_Surface* screen = SDL_SetVideoMode(800, 600, 32, SDL_HWSURFACE); /* use SDL_HWSURFACE? */
+	SDL_WM_SetCaption("pNES", "pNES");
 
 	if (!rom)
 	{
@@ -53,21 +61,34 @@ int main(int argc, char** argv)
 	/* map PRG ROM into memory */
 	/* TODO: account for trainer? */
 	rBanks = (unsigned char*)malloc(16*head.rom_size*1024*sizeof(uint8_t));
-	i = fread(rBanks, 1, 16*head.rom_size*1024*sizeof(uint8_t), rom);
+	fread(rBanks, 1, 16*head.rom_size*1024*sizeof(uint8_t), rom);
+
+	vrBanks = (unsigned char*)malloc(8*head.rom_size*1024*sizeof(uint8_t));
+	fread(vrBanks, 1, 8*head.vrom_size*1024*sizeof(uint8_t), rom);
+	ppu.vram = vrBanks;
+
 	fclose(rom);
 	memory_map_rom(rBanks, 16*head.rom_size*1024*sizeof(uint8_t));
 
 	puts("\nPress enter to start CPU emulation");
-	scanf("%c",&i);
+	/*scanf("%c",&i);*/
 
 	cpu_reset(&cpu);
+
+	SDL_Init(SDL_INIT_EVERYTHING);
+	ppu_render_pattern_table(&ppu, screen);
+	
 
 	/* CPU update loop */
 	for (;;)
 	{
 		cpu_tick(&cpu, log);
 		/* scanf("%c",&i); */
+		SDL_PollEvent(&se); /* TODO: thread this */
+/*		ppu_render_pattern_table(&ppu, screen);*/
 	}
+
+	SDL_Quit();
 
 	fclose(log);
 	free(rBanks);

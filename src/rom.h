@@ -35,6 +35,8 @@ Byte     Contents
 ...-EOF  VROM banks, in ascending order.
 --------------------------------------------------------------------------- */
 
+/* TODO: ACCOUNT FOR PADDING */
+/* #pragma pack(push, 1) */
 typedef struct
 {
 	char magic[4];				/* should be NES^Z */
