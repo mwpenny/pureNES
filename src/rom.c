@@ -6,7 +6,7 @@
 #include "ppu.h"
 #include "rom.h"
 #include "mappers.h"
-#include <SDL.h>
+#include <SDL/SDL.h>
 
 int rom_parse(FILE* rom, ROM_Header* header)
 {
@@ -85,6 +85,8 @@ int main(int argc, char** argv)
 		cpu_tick(&cpu, log);
 		/* scanf("%c",&i); */
 		SDL_PollEvent(&se); /* TODO: thread this */
+		if (se.type == SDL_QUIT)
+			break;
 /*		ppu_render_pattern_table(&ppu, screen);*/
 	}
 
