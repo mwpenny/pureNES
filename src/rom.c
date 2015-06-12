@@ -6,7 +6,7 @@
 #include "ppu.h"
 #include "rom.h"
 #include "mappers.h"
-#include <SDL/SDL.h>
+#include <SDL.h>
 
 int rom_parse(FILE* rom, ROM_Header* header)
 {

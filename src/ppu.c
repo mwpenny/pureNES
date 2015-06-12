@@ -8,7 +8,6 @@ void render_pixel(SDL_Surface* screen, int x, int y, uint32_t pixel)
 	pixels[x + (y*screen->w)] = pixel;
 }
 
-/* TODO: FIX ONE PIXEL COLOR BUG */
 void render_tile(PPU* ppu, SDL_Surface* screen, int tile, int x, int y)
 {
 	int row, pixel;

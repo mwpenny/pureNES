@@ -2,7 +2,7 @@
 #define PPU_H
 
 #include <stdint.h>
-#include <SDL/SDL.h>
+#include <SDL.h>
 
 /* PPU VRAM map (from http://nesdev.com/NESDoc.pdf)
 
