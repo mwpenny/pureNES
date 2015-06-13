@@ -13,14 +13,16 @@ void cpu_tick(CPU* cpu, FILE* log)
 	printf("%x\t%s ", cpu->pc, oc_names[oci.opcode]);
 	amodes[oci.opcode](cpu, &oci);
 	/* fprintf(log, "PC:%x\tOPCODE:%s\tOPERAND:%x\tBYTES:%x\n", cpu->pc, oc_names[oci.opcode], oci.operand, oc_sizes[oci.opcode]); */
-	printf("$%x\n", oci.operand);
+	printf("$%.4x\t\t\t", oci.operand);
+	printf("A:%.2x X:%.2x Y:%.2x P:%.2x SP:%.2x\n", cpu->a, cpu->x, cpu->y, cpu->p, cpu->sp);
 	++cpu->pc;
 	opcodes[oci.opcode](cpu, &oci);
 }
 
 void cpu_reset(CPU* cpu)
 {
-	cpu->p = 0x20 | MASK_B | MASK_I; /* unused, break, and IRQ disable flags */
+	/*cpu->p = 0x20 | MASK_B | MASK_I; /* unused, break, and IRQ disable flags *///
+	cpu->p = 0x20 | MASK_I;
 	cpu->a = cpu->x = cpu->y = 0;
 	cpu->sp = 0;
 
@@ -43,10 +45,10 @@ void cpu_reset(CPU* cpu)
 	/* after reset, APU is silenced */
 }
 
-void cpu_chk_aflags(CPU* cpu, uint8_t val)
+void cpu_chk_aflags(CPU* cpu, int16_t val)
 {
 	/* set/clear zero and negative flags */
-	if (val & MASK_Z) cpu->p |= MASK_Z;
+	if (!val) cpu->p |= MASK_Z;
 	else cpu->p &= ~MASK_Z;
 
 	if (val & MASK_N) cpu->p |= MASK_N;
@@ -133,14 +135,14 @@ void cpu_LDA(CPU* cpu, OCInfo* oci)
 void cpu_LDX(CPU* cpu, OCInfo* oci)
 {
 	cpu->x = memory_get(cpu->mem, oci->operand);
-	cpu_chk_aflags(cpu, cpu->a);
+	cpu_chk_aflags(cpu, cpu->x);
 }
 
 /* LDY - load y register */
 void cpu_LDY(CPU* cpu, OCInfo* oci)
 {
 	cpu->y = memory_get(cpu->mem, oci->operand);
-	cpu_chk_aflags(cpu, cpu->a);
+	cpu_chk_aflags(cpu, cpu->y);
 }
 
 /* STA - store accumulator */
@@ -168,14 +170,14 @@ void cpu_STY(CPU* cpu, OCInfo* oci)
 void cpu_TAX(CPU* cpu, OCInfo* oci)
 {
 	cpu->x = cpu->a;
-	cpu_chk_aflags(cpu, cpu->a);
+	cpu_chk_aflags(cpu, cpu->x);
 }
 
 /* TAY - transfer accumulator to y */
 void cpu_TAY(CPU* cpu, OCInfo* oci)
 {
 	cpu->y = cpu->a;
-	cpu_chk_aflags(cpu, cpu->a);
+	cpu_chk_aflags(cpu, cpu->y);
 }
 
 /* TXA - transfer x to accumulator */
@@ -199,7 +201,7 @@ void cpu_TYA(CPU* cpu, OCInfo* oci)
 void cpu_TSX(CPU* cpu, OCInfo* oci)
 {
 	cpu->x = cpu->sp;
-	cpu_chk_aflags(cpu, cpu->a);
+	cpu_chk_aflags(cpu, cpu->x);
 }
 
 /* TXS - transfer x to stack pointer */
@@ -300,28 +302,28 @@ void cpu_SBC(CPU* cpu, OCInfo* oci)
 /* CMP - compare with accumulator */
 void cpu_CMP(CPU* cpu, OCInfo* oci)
 {
-	uint8_t val = cpu->a - memory_get(cpu->mem, oci->operand);
+	int16_t val = cpu->a - memory_get(cpu->mem, oci->operand);
 	if (val >= 0) cpu_SEC(cpu, oci);
 	else cpu_CLC(cpu, oci);
-	cpu_chk_aflags(cpu, cpu->a);
+	cpu_chk_aflags(cpu, val);
 }
 
 /* CPX - compare with x register */
 void cpu_CPX(CPU* cpu, OCInfo* oci)
 {
-	uint8_t val = cpu->x - memory_get(cpu->mem, oci->operand);
+	int16_t val = cpu->x - memory_get(cpu->mem, oci->operand);
 	if (val >= 0) cpu_SEC(cpu, oci);
 	else cpu_CLC(cpu, oci);
-	cpu_chk_aflags(cpu, cpu->a);
+	cpu_chk_aflags(cpu, val);
 }
 
 /* CPY - compare with y register */
 void cpu_CPY(CPU* cpu, OCInfo* oci)
 {
-	uint8_t val = cpu->y - memory_get(cpu->mem, oci->operand);
+	int16_t val = cpu->y - memory_get(cpu->mem, oci->operand);
 	if (val >= 0) cpu_SEC(cpu, oci);
 	else cpu_CLC(cpu, oci);
-	cpu_chk_aflags(cpu, cpu->a);
+	cpu_chk_aflags(cpu, val);
 }
 
 
@@ -330,45 +332,45 @@ void cpu_CPY(CPU* cpu, OCInfo* oci)
 /* INC - increment memory location */
 void cpu_INC(CPU* cpu, OCInfo* oci)
 {
-	memory_set(cpu->mem, oci->operand,
-		       memory_get(cpu->mem, oci->operand)+1);
-	cpu_chk_aflags(cpu, cpu->a);
+	uint8_t val = memory_get(cpu->mem, oci->operand)+1;
+	memory_set(cpu->mem, oci->operand, val);
+	cpu_chk_aflags(cpu, val);
 }
 
 /* INX - increment x register */
 void cpu_INX(CPU* cpu, OCInfo* oci)
 {
 	++cpu->x;
-	cpu_chk_aflags(cpu, cpu->a);
+	cpu_chk_aflags(cpu, cpu->x);
 }
 
 /* INY - increment y register */
 void cpu_INY(CPU* cpu, OCInfo* oci)
 {
 	++cpu->y;
-	cpu_chk_aflags(cpu, cpu->a);
+	cpu_chk_aflags(cpu, cpu->y);
 }
 
 /* DEC - decrement memory location */
 void cpu_DEC(CPU* cpu, OCInfo* oci)
 {
-	memory_set(cpu->mem, oci->operand,
-			   memory_get(cpu->mem, oci->operand)-1);
-	cpu_chk_aflags(cpu, cpu->a);
+	uint8_t val = memory_get(cpu->mem, oci->operand)-1;
+	memory_set(cpu->mem, oci->operand, val);
+	cpu_chk_aflags(cpu, val);
 }
 
 /* DEX - decrement x register */
 void cpu_DEX(CPU* cpu, OCInfo* oci)
 {
 	--cpu->x;
-	cpu_chk_aflags(cpu, cpu->a);
+	cpu_chk_aflags(cpu, cpu->x);
 }
 
 /* DEY - recrement y register */
 void cpu_DEY(CPU* cpu, OCInfo* oci)
 {
 	--cpu->y;
-	cpu_chk_aflags(cpu, cpu->a);
+	cpu_chk_aflags(cpu, cpu->y);
 }
 
 
