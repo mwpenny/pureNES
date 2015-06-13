@@ -1,18 +1,23 @@
 #ifndef MEMORY_H
 #define MEMORY_H
 
+#include <stdlib.h>
 #include <stdint.h>
 
-static uint8_t ram[2048];
-static uint8_t* rom;
-static uint32_t rom_size;
+typedef struct
+{
+	uint8_t* ram;		/* RAM */
+	uint8_t* ppu_reg;	/* PPU registers */
+	uint8_t* prg1;		/* lower PRG-ROM bank */
+	uint8_t* prg2;		/* upper PRG-ROM bank */
+} Memory;
 
-uint8_t* memory_get_mapped(uint16_t addr);
-void memory_map_rom(uint8_t* rom_addr, uint32_t size);
+void memory_map(uint8_t** ptr, uint8_t* dest);
+uint8_t* memory_get_mapped_address(Memory* mem, uint16_t addr);
 
-uint8_t memory_get(uint16_t addr);
-uint16_t memory_get16(uint16_t addr);
-uint16_t memory_get16_ind(uint16_t addr);
-void memory_set(uint16_t addr, uint8_t val);
+uint8_t memory_get(Memory* mem, uint16_t addr);
+uint16_t memory_get16(Memory* mem, uint16_t addr);
+uint16_t memory_get16_ind(Memory* mem, uint16_t addr);
+void memory_set(Memory* mem, uint16_t addr, uint8_t val);
 
 #endif

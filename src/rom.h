@@ -40,8 +40,8 @@ Byte     Contents
 typedef struct
 {
 	char magic[4];				/* should be NES^Z */
-	unsigned char rom_size;		/* number of 16kB ROM banks */
-	unsigned char vrom_size;	/* number of 8kB VROM banks*/
+	unsigned char rom_banks;	/* number of 16kB ROM banks */
+	unsigned char vrom_banks;	/* number of 8kB VROM banks*/
 	unsigned char flags1;		/* flag bitfield 1 */
 	unsigned char flags2;		/* flag bitfield 2 */
 	unsigned char ram_banks;	/* number of 8kB RAM banks */

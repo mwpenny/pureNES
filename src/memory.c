@@ -1,69 +1,83 @@
 #include "memory.h"
 
-/* NES memory map (from https://en.wikibooks.org/wiki/NES_Programming/Memory_Map)
+/* TODO: is this function really necessary? */
+void memory_map(uint8_t** ptr, uint8_t* dest)
+{
+	*ptr = dest;
+}
 
-0x0000 to 0x00FF: zero page
-0x0100 to 0x01FF: stack
-0x0200 to 0x07FF: general purpose RAM
-0x0800 to 0x1FFF: mirrors 0x0000 to 0x07FF (repeats every 2048 bytes)
-0x2000 to 0x2007: PPU registers
-0x2008 to 0x3FFF: mirrors 0x2000 to 0x2007 (repeats every 8 bytes)
-0x4000 to 0x401F: APU and I/O registers
-0x4020 to 0x5FFF: expansion ROM
-0x6000 to 0x7FFF: SRAM
-0x8000 to 0xFFFF: PRG ROM
-  mirrored at 0xC000 if only one bank
-  0xFFFA/0xFFFB: NMI handler
-  0xFFFC/0xFFFD: reset handler
-  0xFFFE/0xFFFF: IRQ/BRK handler
+/* CPU memory map (from https://en.wikibooks.org/wiki/NES_Programming/Memory_Map)
+
+$0000 to $01FF: RAM
+  $0000 to $00FF: zero page
+  $0100 to $01FF: stack
+  $0200 to $07FF: general purpose RAM
+  $0800 to $1FFF: mirrors $0000 to $07FF (repeats every 2048 bytes)
+$2000 to $3FFF: PPU registers
+  $2000: control register
+  $2001: mask register
+  $2002: status register
+  $2003: OAM address
+  $2004: OAM data
+  $2005: scroll register
+  $2006: read/write address
+  $2007: data read/write
+  $2008 to $3FFF: mirrors $2000 to $2007 (repeats every 8 bytes)
+$4000 to $401F: APU and I/O registers
+$4020 to $5FFF: expansion ROM
+$6000 to $7FFF: SRAM
+$8000 to $FFFF: PRG ROM banks
+  $8000 to $BFFF: PRG ROM bank 1
+  $C000 to $FFFF: PRG ROM bank 2  
+    $FFFA/$FFFB: NMI handler
+    $FFFC/$FFFD: reset handler
+    $FFFE/$FFFF: IRQ/BRK handler
+
 */
-uint8_t* memory_get_mapped(uint16_t addr)
+uint8_t* memory_get_mapped_address(Memory* mem, uint16_t addr)
 {
 	if (addr < 0x2000)
-		return &ram[addr % 2048];
-	else if (addr < 0x4000);
-	/* return ppu_registers[addr % 8]; */
+		return &mem->ram[addr % 0x800];
+	else if (addr < 0x4000)
+		return &mem->ppu_reg[(addr % 0x2008) - 0x2000]; /* TODO: what about struct padding!? */
 	else if (addr < 0x4020);
-	/* return apu_io_registers[addr]; */
+		/* return apu_io_registers[addr]; */
 	else if (addr < 0x6000);
-	/* return expansion_rom[addr]; */
+		/* return expansion_rom[addr]; */
 	else if (addr < 0x8000);
-	/* return sram[addr]; */
+		/* return sram[addr]; */
+	else if (addr < 0xC000)
+		return &mem->prg1[addr - 0x8000];
 	else
-		return &rom[(addr - 0x8000) % rom_size]; /* mirror if only one bank */
+		return &mem->prg2[addr - 0xC000];
 }
 
-void memory_map_rom(uint8_t* rom_addr, uint32_t size)
+uint8_t memory_get(Memory* mem, uint16_t addr)
 {
-	rom = rom_addr;
-	rom_size = size;
+	if (addr >= 0x4000 && addr < 0x8000) return 0; /* TODO: remove after mapping fully implemented */
+	return *memory_get_mapped_address(mem, addr);
 }
 
-uint8_t memory_get(uint16_t addr)
+uint16_t memory_get16(Memory* mem, uint16_t addr)
 {
-	if (addr >= 0x2000 && addr < 0x8000) return 0; /* TODO: remove after mapping fully implemented */
-	return *memory_get_mapped(addr);
+	if (addr >= 0x4000 && addr < 0x8000) return 0; /* TODO: remove after mapping fully implemented */
+	return *memory_get_mapped_address(mem, addr) | (*memory_get_mapped_address(mem, addr+1) << 8);
 }
 
-uint16_t memory_get16(uint16_t addr)
+uint16_t memory_get16_ind(Memory* mem, uint16_t addr)
 {
-	if (addr >= 0x2000 && addr < 0x8000) return 0; /* TODO: remove after mapping fully implemented */
-	return *memory_get_mapped(addr) | (*memory_get_mapped(addr+1) << 8);
-}
-
-uint16_t memory_get16_ind(uint16_t addr)
-{
-	if (addr >= 0x2000 && addr < 0x8000) return 0; /* TODO: remove after mapping fully implemented */
+	if (addr >= 0x4000 && addr < 0x8000) return 0; /* TODO: remove after mapping fully implemented */
 
 	/* the 6502 doesn't handle page boundary crosses for indirect addressing properly
 	   e.g. JMP ($80FF) will fetch the high byte from $8000, NOT $8100! */
-	uint16_t hi_addr = (addr & 0xFF00) | (uint8_t)((addr & 0xFF)+1);
-	return *memory_get_mapped(addr) | (*memory_get_mapped(hi_addr) << 8);
+	{uint16_t hi_addr = (addr & 0xFF00) | (uint8_t)((addr & 0xFF)+1);
+	return *memory_get_mapped_address(mem, addr) | 
+		   (*memory_get_mapped_address(mem, hi_addr) << 8);}
 }
 
-void memory_set(uint16_t addr, uint8_t val)
+void memory_set(Memory* mem, uint16_t addr, uint8_t val)
 {
 	/* TODO: disallow writing into read-only memory */
-	if (addr >= 0x2000 && addr < 0x8000) return; /* TODO: remove after mapping fully implemented */
-	*memory_get_mapped(addr) = val;
+	if (addr >= 0x4000 && addr < 0x8000) return; /* TODO: remove after mapping fully implemented */
+	*memory_get_mapped_address(mem, addr) = val;
 }

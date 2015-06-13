@@ -24,6 +24,8 @@ typedef struct
 	uint8_t sp;			/* stack pointer */
 	uint8_t p;			/* processor flags */
 	uint8_t a, x, y;	/* registers */
+	uint8_t ram[2048];	/* RAM */
+	Memory* mem;		/* pointers to mapped memory */
 } CPU;
 
 typedef struct
@@ -32,6 +34,7 @@ typedef struct
 	uint16_t operand;
 } OCInfo;
 
+void cpu_init(CPU* cpu, Memory* mem);
 void cpu_tick(CPU* cpu, FILE* log);
 void cpu_reset(CPU* cpu);
 
