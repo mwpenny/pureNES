@@ -3,20 +3,55 @@
 void cpu_init(CPU* cpu, Memory* mem)
 {
 	cpu->mem = mem;
+	cpu->interrupt = INT_NUL;
+}
+
+void cpu_interrupt(CPU* cpu, uint8_t type)
+{
+	OCInfo oci = {0, 0};
+	if (type == INT_NUL) return;
+
+	/* Set jump address to interrupt handler */
+	switch (type)
+	{
+	case INT_NMI:
+		oci.operand = ADDR_NMI;
+		break;
+	case INT_IRQ: /* don't set address if IRQs are disabled */
+	case INT_BRK:
+		if (~(cpu->p & MASK_I)) oci.operand = ADDR_IRQ;
+	}
+
+	/* operand set --> valid interrupt type / IRQs not disabled */
+	if (oci.operand)
+	{
+		cpu_JSR(cpu, &oci);
+		cpu_PHP(cpu, NULL);
+		cpu_SEI(cpu, &oci);
+
+		cpu->interrupt = INT_NUL;
+	}
 }
 
 #include <stdio.h>
 void cpu_tick(CPU* cpu, FILE* log)
 {
-	OCInfo oci;
-	oci.opcode = memory_get(cpu->mem, cpu->pc);
-	printf("%x\t%s ", cpu->pc, oc_names[oci.opcode]);
-	amodes[oci.opcode](cpu, &oci);
-	/* fprintf(log, "PC:%x\tOPCODE:%s\tOPERAND:%x\tBYTES:%x\n", cpu->pc, oc_names[oci.opcode], oci.operand, oc_sizes[oci.opcode]); */
-	printf("$%.4x\t\t\t", oci.operand);
-	printf("A:%.2x X:%.2x Y:%.2x P:%.2x SP:%.2x\n", cpu->a, cpu->x, cpu->y, cpu->p, cpu->sp);
-	++cpu->pc;
-	opcodes[oci.opcode](cpu, &oci);
+	if (cpu->interrupt)
+	{
+		cpu_interrupt(cpu, cpu->interrupt);
+	}
+	else
+	{
+		OCInfo oci;
+		oci.opcode = memory_get(cpu->mem, cpu->pc);
+		printf("%x\t%s ", cpu->pc, oc_names[oci.opcode]);
+		amodes[oci.opcode](cpu, &oci);
+		/* fprintf(log, "PC:%x\tOPCODE:%s\tOPERAND:%x\tBYTES:%x\n", cpu->pc, oc_names[oci.opcode], oci.operand, oc_sizes[oci.opcode]); */
+		printf("$%.4x\t\t\t", oci.operand);
+		printf("A:%.2x X:%.2x Y:%.2x P:%.2x SP:%.2x\n", cpu->a, cpu->x, cpu->y, cpu->p, cpu->sp);
+		++cpu->pc;
+		opcodes[oci.opcode](cpu, &oci);
+	}
 }
 
 void cpu_reset(CPU* cpu)
@@ -69,17 +104,17 @@ void amode_IMM(CPU* cpu, OCInfo* oci)
 }
 void amode_ZPG(CPU* cpu, OCInfo* oci)
 {
-	oci->operand = memory_get(cpu->mem, cpu->pc+1) % 0xFF;
+	oci->operand = memory_get(cpu->mem, cpu->pc+1) & 0xFF;
 	++cpu->pc;
 }
 void amode_ZPX(CPU* cpu, OCInfo* oci)
 {
-	oci->operand = (memory_get(cpu->mem, cpu->pc+1) + cpu->x) % 0xFF;
+	oci->operand = (memory_get(cpu->mem, cpu->pc+1) + cpu->x) & 0xFF;
 	++cpu->pc;
 }
 void amode_ZPY(CPU* cpu, OCInfo* oci)
 {
-	oci->operand = (memory_get(cpu->mem, cpu->pc+1) + cpu->y) % 0xFF;
+	oci->operand = (memory_get(cpu->mem, cpu->pc+1) + cpu->y) & 0xFF;
 	++cpu->pc;
 }
 void amode_REL(CPU* cpu, OCInfo* oci)
@@ -113,12 +148,12 @@ void amode_IND(CPU* cpu, OCInfo* oci)
 void amode_XID(CPU* cpu, OCInfo* oci)
 {
 	oci->operand = memory_get16_ind(cpu->mem,
-				  (memory_get(cpu->mem, cpu->pc+1) + cpu->x) % 0xFF);
+				  (memory_get(cpu->mem, cpu->pc+1) + cpu->x) & 0xFF);
 	++cpu->pc;
 }
 void amode_IDY(CPU* cpu, OCInfo* oci)
 {
-	oci->operand = (memory_get16_ind(cpu->mem, cpu->pc+1) + cpu->y) % 0xFF;
+	oci->operand = (memory_get16_ind(cpu->mem, cpu->pc+1) + cpu->y) & 0xFF;
 	cpu->pc += 2;
 }
 
@@ -219,7 +254,10 @@ void cpu_PHA(CPU* cpu, OCInfo* oci)
 /* PHP - push processor status on stack */
 void cpu_PHP(CPU* cpu, OCInfo* oci)
 {
-	memory_set(cpu->mem, 0x100 | cpu->sp--, cpu->p);
+	/* Set the BRK flag if we are handling a BRK interrupt */
+	uint8_t flags = cpu->p;
+	if (cpu->interrupt == INT_BRK) flags |= MASK_B;
+	memory_set(cpu->mem, 0x100 | cpu->sp--, flags);
 }
 
 /* PLA - pull accumulator from stack */
@@ -263,7 +301,7 @@ void cpu_ORA(CPU* cpu, OCInfo* oci)
 void cpu_BIT(CPU* cpu, OCInfo* oci) /* TODO: without branching? */
 {
 	/* clear zero flag if register a has a mask bit set */
-	if ((cpu->a & memory_get(cpu->mem, oci->operand))) cpu->p &= ~MASK_Z;
+	if (cpu->a & memory_get(cpu->mem, oci->operand)) cpu->p &= ~MASK_Z;
 	else cpu->p |= MASK_Z;
 
 	/* copy bits 6 and 7 from the memory location */
@@ -381,7 +419,7 @@ void cpu_ASL(CPU* cpu, OCInfo* oci)
 {
 	/* address == 0 --> use accumulator */
 	uint8_t* loc = ~oci->operand ? &cpu->a :
-				   memory_get_mapped_address(cpu->mem, oci->operand);
+				   memory_get_effective_addr(cpu->mem, oci->operand);
 	cpu_CLC(cpu, NULL);
 	cpu->p |= (*loc & 0x80) >> 7;
 	*loc <<= 1;
@@ -393,7 +431,7 @@ void cpu_LSR(CPU* cpu, OCInfo* oci)
 {
 	/* address == 0 --> use accumulator */
 	uint8_t* loc = ~oci->operand ? &cpu->a :
-				   memory_get_mapped_address(cpu->mem, oci->operand);
+				   memory_get_effective_addr(cpu->mem, oci->operand);
 	cpu_CLC(cpu, NULL);
 	cpu->p |= *loc & MASK_C;
 	*loc >>= 1;
@@ -405,7 +443,7 @@ void cpu_ROL(CPU* cpu, OCInfo* oci)
 {
 	/* address == 0 --> use accumulator */
 	uint8_t* loc = ~oci->operand ? &cpu->a :
-				   memory_get_mapped_address(cpu->mem, oci->operand);
+				   memory_get_effective_addr(cpu->mem, oci->operand);
 	uint8_t carry = cpu->p & MASK_C;
 	cpu_CLC(cpu, NULL);
 	cpu->p |= (*loc & 0x80) >> 7;
@@ -419,7 +457,7 @@ void cpu_ROR(CPU* cpu, OCInfo* oci)
 {
 	/* address == 0 --> use accumulator */
 	uint8_t* loc = ~oci->operand ? &cpu->a :
-				   memory_get_mapped_address(cpu->mem, oci->operand);
+				   memory_get_effective_addr(cpu->mem, oci->operand);
 	uint8_t carry = cpu->p & MASK_C;
 	cpu_CLC(cpu, NULL);
 	cpu->p |= *loc & MASK_C;
@@ -558,7 +596,7 @@ void cpu_BRK(CPU* cpu, OCInfo* oci)
 	memory_set(cpu->mem, 0x100 | cpu->sp--, (cpu->pc) & 0xFF);
 	cpu_PHP(cpu, oci);
 	cpu_SEI(cpu, oci);
-	cpu->pc = memory_get16(cpu->mem, ADDR_BRK);
+	cpu->pc = memory_get16(cpu->mem, ADDR_IRQ);
 }
 
 /* NOP - no operation */
@@ -568,6 +606,7 @@ void cpu_NOP(CPU* cpu, OCInfo* oci) {}
 void cpu_RTI(CPU* cpu, OCInfo* oci)
 {
 	cpu_PLP(cpu, oci);
+	cpu->p &= ~MASK_B; /* B flag only set on stack */
 	cpu->pc = (memory_get(cpu->mem, 0x100 | ++cpu->sp) |
 			  (memory_get(cpu->mem, 0x100 | ++cpu->sp) << 8));
 }
