@@ -20,7 +20,6 @@ $3F00 to $3FFF: palettes (13 colors per palette)
     $3F00: background color (every 4 bytes mirror this)
   $3F10 to $3F1F: sprite palette
   $3F20 to $3FFF: mirrors $3F00 to $3F1F
-$4000 to $10000: mirrors $0000 to $3FFF
 
 */
 
@@ -52,16 +51,18 @@ static uint32_t palette[64] =
 
 typedef struct
 {
+	/* TODO: remove unused registers. Some mapped memory just uses functions */
+	uint8_t io_latch;
+	uint8_t addr_latch;
+
 	uint8_t ctrl;		/* write */
 	uint8_t mask;		/* write */
 	uint8_t status;		/* read */
 
 	uint8_t oam_addr;	/* write */
-	uint8_t oam_data;	/* read / write */
 
-	uint8_t scroll;		/* write */
-	uint8_t vram_addr;	/* read */
-	uint8_t vram_data;	/* read / write*/
+	uint8_t scrollx, scrolly;
+	uint16_t vram_addr;
 
 	uint8_t oam_dma;	/* read / write */
 
@@ -70,6 +71,64 @@ typedef struct
 	uint8_t oam[256]; /* SPR-RAM */
 } PPU;
 
+/* PPU register read/write handlers */
+uint8_t ppu_read_ctrl(PPU* ppu);
+void ppu_write_ctrl(PPU* ppu, uint8_t val);
+
+uint8_t ppu_read_mask(PPU* ppu);
+void ppu_write_mask(PPU* ppu, uint8_t val);
+
+uint8_t ppu_read_status(PPU* ppu);
+void ppu_write_status(PPU* ppu, uint8_t val);
+
+uint8_t ppu_read_oam_addr(PPU* ppu);
+void ppu_write_oam_addr(PPU* ppu, uint8_t val);
+
+uint8_t ppu_read_oam_data(PPU* ppu);
+void ppu_write_oam_data(PPU* ppu, uint8_t val);
+
+uint8_t ppu_read_scroll(PPU* ppu);
+void ppu_write_scroll(PPU* ppu, uint8_t val);
+
+uint8_t ppu_read_vram_addr(PPU* ppu);
+void ppu_write_vram_addr(PPU* ppu, uint8_t val);
+
+uint8_t ppu_read_vram_data(PPU* ppu);
+void ppu_write_vram_data(PPU* ppu, uint8_t val);
+
+uint8_t ppu_read_oam_dma(PPU* ppu);
+void ppu_write_oam_dma(PPU* ppu, uint8_t val);
+
+/* TODO: dynamically set these?? */
+/* Lookup tables */
+static uint8_t (*ppu_read_handlers[8])(PPU* ppu) = 
+{
+	ppu_read_ctrl,
+	ppu_read_mask,
+	ppu_read_status,
+	ppu_read_oam_addr,
+	ppu_read_oam_data,
+	ppu_read_scroll,
+	ppu_read_vram_addr,
+	ppu_read_vram_data
+};
+
+static void (*ppu_write_handlers[8])(PPU* ppu, uint8_t val) = 
+{
+	ppu_write_ctrl,
+	ppu_write_mask,
+	ppu_write_status,
+	ppu_write_oam_addr,
+	ppu_write_oam_data,
+	ppu_write_scroll,
+	ppu_write_vram_addr,
+	ppu_write_vram_data
+};
+
+uint8_t ppu_read(PPU* ppu, uint16_t addr);
+void ppu_write(PPU* ppu, uint16_t addr, uint8_t val);
+
 void ppu_render_pattern_table(PPU* ppu, SDL_Surface* screen);
+void ppu_render_nametable(PPU* ppu, SDL_Surface* screen);
 
 #endif

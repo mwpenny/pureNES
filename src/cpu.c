@@ -19,7 +19,7 @@ void cpu_interrupt(CPU* cpu, uint8_t type)
 		break;
 	case INT_IRQ: /* don't set address if IRQs are disabled */
 	case INT_BRK:
-		if (~(cpu->p & MASK_I)) oci.operand = ADDR_IRQ;
+		if (!(cpu->p & MASK_I)) oci.operand = ADDR_IRQ;
 	}
 
 	/* operand set --> valid interrupt type / IRQs not disabled */
@@ -316,13 +316,14 @@ void cpu_BIT(CPU* cpu, OCInfo* oci) /* TODO: without branching? */
 /* ADC - add with carry to accumulator */
 void cpu_ADC(CPU* cpu, OCInfo* oci)
 {
-	int16_t val = cpu->a + memory_get(cpu->mem, oci->operand) + (cpu->p & MASK_C);
+	uint8_t num = memory_get(cpu->mem, oci->operand);
+	int16_t val = cpu->a + num + (cpu->p & MASK_C);
 	if (val & 0x100) cpu_SEC(cpu, oci);
 	else cpu_CLC(cpu, oci);
 
 	/* set overflow flag if sum of 2 numbers with same sign has different sign */
-	if ((~(cpu->a ^ memory_get(cpu->mem, oci->operand)) & (cpu->a ^ val)) & MASK_N)
-		cpu->p |= 0x40;
+	if ((~(cpu->a ^ num) & (cpu->a ^ val)) & MASK_N)
+		cpu->p |= MASK_V;
 	else
 		cpu_CLV(cpu, oci);
 
@@ -418,52 +419,64 @@ void cpu_DEY(CPU* cpu, OCInfo* oci)
 void cpu_ASL(CPU* cpu, OCInfo* oci)
 {
 	/* address == 0 --> use accumulator */
-	uint8_t* loc = ~oci->operand ? &cpu->a :
-				   memory_get_effective_addr(cpu->mem, oci->operand);
+	uint8_t num = !oci->operand ? cpu->a : memory_get(cpu->mem, oci->operand);
+
 	cpu_CLC(cpu, NULL);
-	cpu->p |= (*loc & 0x80) >> 7;
-	*loc <<= 1;
-	cpu_chk_aflags(cpu, *loc);
+	cpu->p |= (num & 0x80) >> 7;
+	num <<= 1;
+	cpu_chk_aflags(cpu, num);
+
+	if (!oci->operand) cpu->a = num;
+	else memory_set(cpu->mem, oci->operand, num);
 }
 
 /* LSR - logical shift right */
 void cpu_LSR(CPU* cpu, OCInfo* oci)
 {
 	/* address == 0 --> use accumulator */
-	uint8_t* loc = ~oci->operand ? &cpu->a :
-				   memory_get_effective_addr(cpu->mem, oci->operand);
+	uint8_t num = !oci->operand ? cpu->a : memory_get(cpu->mem, oci->operand);
+
 	cpu_CLC(cpu, NULL);
-	cpu->p |= *loc & MASK_C;
-	*loc >>= 1;
-	cpu_chk_aflags(cpu, *loc);
+	cpu->p |= num & MASK_C;
+	num >>= 1;
+	cpu_chk_aflags(cpu, num);
+
+	if (!oci->operand) cpu->a = num;
+	else memory_set(cpu->mem, oci->operand, num);
 }
 
 /* ROL - rotate left */
 void cpu_ROL(CPU* cpu, OCInfo* oci)
 {
 	/* address == 0 --> use accumulator */
-	uint8_t* loc = ~oci->operand ? &cpu->a :
-				   memory_get_effective_addr(cpu->mem, oci->operand);
+	uint8_t num = !oci->operand ? cpu->a : memory_get(cpu->mem, oci->operand);
 	uint8_t carry = cpu->p & MASK_C;
+
 	cpu_CLC(cpu, NULL);
-	cpu->p |= (*loc & 0x80) >> 7;
-	*loc <<= 1;
-	*loc |= carry;
-	cpu_chk_aflags(cpu, *loc);
+	cpu->p |= (num & 0x80) >> 7;
+	num <<= 1;
+	num |= carry;
+	cpu_chk_aflags(cpu, num);
+
+	if (!oci->operand) cpu->a = num;
+	else memory_set(cpu->mem, oci->operand, num);
 }
 
 /* ROR - rotate right */
 void cpu_ROR(CPU* cpu, OCInfo* oci)
 {
 	/* address == 0 --> use accumulator */
-	uint8_t* loc = ~oci->operand ? &cpu->a :
-				   memory_get_effective_addr(cpu->mem, oci->operand);
+	uint8_t num = !oci->operand ? cpu->a : memory_get(cpu->mem, oci->operand);
 	uint8_t carry = cpu->p & MASK_C;
+
 	cpu_CLC(cpu, NULL);
-	cpu->p |= *loc & MASK_C;
-	*loc >>= 1;
-	*loc |= carry << 7;
-	cpu_chk_aflags(cpu, *loc);
+	cpu->p |= num & MASK_C;
+	num >>= 1;
+	num |= carry << 7;
+	cpu_chk_aflags(cpu, num);
+
+	if (!oci->operand) cpu->a = num;
+	else memory_set(cpu->mem, oci->operand, num);
 }
 
 
@@ -496,7 +509,7 @@ void cpu_RTS(CPU* cpu, OCInfo* oci)
 /* BCC - branch if carry flag clear */
 void cpu_BCC(CPU* cpu, OCInfo* oci)
 {
-	if (~(cpu->p & MASK_C)) cpu->pc = oci->operand;
+	if (!(cpu->p & MASK_C)) cpu->pc = oci->operand;
 }
 
 /* BCS - branch if carry flag set */
@@ -520,19 +533,19 @@ void cpu_BMI(CPU* cpu, OCInfo* oci)
 /* BNE - branch if zero flag clear */
 void cpu_BNE(CPU* cpu, OCInfo* oci)
 {
-	if (~(cpu->p & MASK_Z)) cpu->pc = oci->operand;
+	if (!(cpu->p & MASK_Z)) cpu->pc = oci->operand;
 }
 
 /* BPL - branch if negative flag set */
 void cpu_BPL(CPU* cpu, OCInfo* oci)
 {
-	if (~(cpu->p & MASK_N)) cpu->pc = oci->operand;
+	if (!(cpu->p & MASK_N)) cpu->pc = oci->operand;
 }
 
 /* BVC - branch if overflow flag clear */
 void cpu_BVC(CPU* cpu, OCInfo* oci)
 {
-	if (~(cpu->p & MASK_C)) cpu->pc = oci->operand;
+	if (!(cpu->p & MASK_C)) cpu->pc = oci->operand;
 }
 
 /* BVC - branch if overflow flag set */
