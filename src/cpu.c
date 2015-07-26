@@ -7,7 +7,7 @@ void cpu_init(CPU* cpu, Memory* mem)
 	cpu->interrupt = INT_NUL;
 }
 
-void cpu_handle_interrupt(CPU* cpu, uint8_t type)
+static void cpu_handle_interrupt(CPU* cpu, uint8_t type)
 {
 	OCInfo oci = {0, 0};
 	if (type == INT_NUL) return;
@@ -19,11 +19,11 @@ void cpu_handle_interrupt(CPU* cpu, uint8_t type)
 		cpu_reset(cpu);
 		break;
 	case INT_NMI:
-		oci.operand = ADDR_NMI;
+		oci.operand = memory_get16(cpu->mem, ADDR_NMI);
 		break;
 	case INT_IRQ: /* don't set address if IRQs are disabled */
 	case INT_BRK:
-		if (!(cpu->p & MASK_I)) oci.operand = ADDR_IRQ;
+		if (!(cpu->p & MASK_I)) oci.operand = memory_get16(cpu->mem, ADDR_IRQ);
 	}
 
 	/* operand set --> valid interrupt type / IRQs not disabled */
@@ -32,9 +32,8 @@ void cpu_handle_interrupt(CPU* cpu, uint8_t type)
 		cpu_JSR(cpu, &oci);
 		cpu_PHP(cpu, NULL);
 		cpu_SEI(cpu, &oci);
-
-		cpu->interrupt = INT_NUL;
 	}
+	cpu->interrupt = INT_NUL;
 }
 
 void cpu_interrupt(CPU* cpu, uint8_t type)
@@ -148,7 +147,7 @@ void amode_ABY(CPU* cpu, OCInfo* oci)
 	oci->operand = memory_get16(cpu->mem, cpu->pc+1) + cpu->y;
 	cpu->pc += 2;
 }
-/* TODO: INDIRECT JUMP BUG?*/
+
 void amode_IND(CPU* cpu, OCInfo* oci)
 {
 	oci->operand = memory_get16_ind(cpu->mem, memory_get16(cpu->mem, cpu->pc+1));
@@ -320,7 +319,7 @@ void cpu_BIT(CPU* cpu, OCInfo* oci) /* TODO: without branching? */
 
 
 /*** Arithmetic operations ***/
-/* TODO: BCD MODE */
+/* TODO: BCD MODE? */
 
 /* ADC - add with carry to accumulator */
 void cpu_ADC(CPU* cpu, OCInfo* oci)
@@ -508,7 +507,8 @@ void cpu_JSR(CPU* cpu, OCInfo* oci)
 /* RTS - return from subroutine */
 void cpu_RTS(CPU* cpu, OCInfo* oci)
 {
-	cpu->pc = memory_get16(cpu->mem, 0x100 | ++cpu->sp) + 1;
+	cpu->pc = (memory_get(cpu->mem, 0x100 | ++cpu->sp) |
+			  (memory_get(cpu->mem, 0x100 | ++cpu->sp) << 8)) + 1;
 	++cpu->sp;
 }
 
