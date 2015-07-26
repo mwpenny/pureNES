@@ -4,6 +4,9 @@
 #include <stdint.h>
 #include <SDL.h>
 
+struct CPU;
+struct Memory;
+
 /* PPU VRAM map (from http://nesdev.com/NESDoc.pdf)
 
 $0000 to $1FFF: pattern tables
@@ -49,6 +52,15 @@ static uint32_t palette[64] =
 	0xF8D878, 0xD8F878, 0xB8F8B8, 0xB8F8D8, 0x00FCFC, 0xF8D8F8, 0x000000, 0x000000
 };
 
+#define PPU_BA_MASK 0x0C00
+#define PPU_COARSEX_MASK 0x001F
+#define PPU_FINEX_MASK 0x0007
+
+#define PPU_COARSEY_MASK 0x03E0
+#define PPU_FINEY_MASK 0x7000
+
+#define PPU_VRAM_ADDRH_MASK 0x3F00
+
 typedef struct
 {
 	/* TODO: remove unused registers. Some mapped memory just uses functions */
@@ -61,15 +73,28 @@ typedef struct
 
 	uint8_t oam_addr;	/* write */
 
-	uint8_t scrollx, scrolly;
-	uint16_t vram_addr;
+	/*
+	v and t bits:
 
-	uint8_t oam_dma;	/* read / write */
+	yyy NN YYYYY XXXXX
+	||| || ||||| +++++-- coarse X scroll
+	||| || +++++-------- coarse Y scroll
+	||| ++-------------- nametable select
+	+++----------------- fine Y scroll
+	*/
+
+	uint16_t v, t; /* VRAM address and temp address (top left tile). 15 bits */
+	uint8_t x; /* fine x scroll. 3 bits */
 
 	/*uint8_t vram[16384];*/
 	uint8_t* vram;
 	uint8_t oam[256]; /* SPR-RAM */
+
+	struct CPU* cpu; /* TODO: only needed for sending NMI. Maybe just store function pointer
+			           to NMI-generating function. Then no need to know about CPU */
 } PPU;
+
+void ppu_init(PPU* ppu, struct CPU* cpu);
 
 /* PPU register read/write handlers */
 uint8_t ppu_read_ctrl(PPU* ppu);

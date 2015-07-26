@@ -4,9 +4,6 @@
 #ifndef ROM_H
 #define ROM_H
 
-#include <stdio.h>
-#include <string.h>
-
 /* TODO: ERROR CHECKING */
 
 /* iNES header. (from http://fms.komkon.org/EMUL8/NES.html#LABM)

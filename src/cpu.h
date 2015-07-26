@@ -4,7 +4,6 @@
 #define CPU_H
 
 #include <stdint.h>
-#include <stdio.h>
 #include "memory.h"
 
 #define ADDR_NMI 0xFFFA
@@ -12,9 +11,10 @@
 #define ADDR_IRQ 0xFFFE
 
 #define INT_NUL 0
-#define INT_NMI 1
-#define INT_IRQ 2
-#define INT_BRK 3
+#define INT_RST 1
+#define INT_NMI 2
+#define INT_IRQ 3
+#define INT_BRK 4
 
 #define MASK_C 0x01
 #define MASK_Z 0x02
@@ -41,6 +41,7 @@ typedef struct
 	uint16_t operand;
 } OCInfo;
 
+void cpu_interrupt(CPU* cpu, uint8_t type);
 void cpu_init(CPU* cpu, Memory* mem);
 void cpu_tick(CPU* cpu, FILE* log);
 void cpu_reset(CPU* cpu);

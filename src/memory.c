@@ -1,3 +1,4 @@
+#include <stdlib.h>
 #include "memory.h"
 
 /* CPU memory map (from https://en.wikibooks.org/wiki/NES_Programming/Memory_Map)

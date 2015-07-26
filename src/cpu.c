@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include "cpu.h"
 
 void cpu_init(CPU* cpu, Memory* mem)
@@ -6,7 +7,7 @@ void cpu_init(CPU* cpu, Memory* mem)
 	cpu->interrupt = INT_NUL;
 }
 
-void cpu_interrupt(CPU* cpu, uint8_t type)
+void cpu_handle_interrupt(CPU* cpu, uint8_t type)
 {
 	OCInfo oci = {0, 0};
 	if (type == INT_NUL) return;
@@ -14,6 +15,9 @@ void cpu_interrupt(CPU* cpu, uint8_t type)
 	/* Set jump address to interrupt handler */
 	switch (type)
 	{
+	case INT_RST:
+		cpu_reset(cpu);
+		break;
 	case INT_NMI:
 		oci.operand = ADDR_NMI;
 		break;
@@ -33,12 +37,17 @@ void cpu_interrupt(CPU* cpu, uint8_t type)
 	}
 }
 
+void cpu_interrupt(CPU* cpu, uint8_t type)
+{
+	cpu->interrupt = type;
+}
+
 #include <stdio.h>
 void cpu_tick(CPU* cpu, FILE* log)
 {
 	if (cpu->interrupt)
 	{
-		cpu_interrupt(cpu, cpu->interrupt);
+		cpu_handle_interrupt(cpu, cpu->interrupt);
 	}
 	else
 	{

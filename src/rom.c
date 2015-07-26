@@ -2,6 +2,9 @@
 /* iNES ROM parser */
 
 #include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+
 #include "cpu.h"
 #include "ppu.h"
 #include "rom.h"
@@ -71,23 +74,25 @@ int main(int argc, char** argv)
 	fclose(rom);
 
 	cpu_init(&cpu, &mem);
-	memory_map(&mem.ram, cpu.ram);
-	memory_map(&mem.ppu_reg, (uint8_t*)&ppu); /* TODO: LIKELY UNSAFE */
+	mem.ram = cpu.ram;
+	mem.ppu = &ppu;
 
 	/* map PRG-ROM banks */
-	memory_map(&mem.prg1, rBanks);
+	mem.prg1 = rBanks;
 	if (head.rom_banks == 1) /* mirror bank 1 if there is no bank 2 */
-		memory_map(&mem.prg2, rBanks);
-	else 
-		memory_map(&mem.prg1, rBanks + 0x4000);
+		mem.prg2 = rBanks;
+	else
+		mem.prg1 = rBanks + 0x4000;
 
 	puts("\nPress enter to start CPU emulation");
 	/*scanf("%c",&i);*/
 
-	cpu_reset(&cpu);
+	cpu_interrupt(&cpu, INT_RST);
+	/*cpu_reset(&cpu);*/
 
 	SDL_Init(SDL_INIT_EVERYTHING);
 	ppu_render_pattern_table(&ppu, screen);
+/*	ppu_render_nametable(&ppu, screen); /* won't work until PPU registers are properly implemented */ /*/
 	
 
 	/* CPU update loop */
