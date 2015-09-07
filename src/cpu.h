@@ -23,6 +23,7 @@
 #define MASK_I 0x04
 #define MASK_D 0x08
 #define MASK_B 0x10
+#define MASK_U 0x20
 #define MASK_V 0x40
 #define MASK_N 0x80
 
@@ -36,7 +37,8 @@ typedef struct
 	uint8_t p;			/* processor flags */
 	uint8_t a, x, y;	/* other registers */
 
-	int cycles;
+	int cycles, dma_cycles;
+	uint8_t oddcycle;
 } CPU;
 
 typedef struct

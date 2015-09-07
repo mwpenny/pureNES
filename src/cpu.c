@@ -7,6 +7,9 @@
 void cpu_init(CPU* cpu, NES* nes)
 {
 	memset(cpu, 0, sizeof(*cpu));
+	cpu->cycles = 0;
+	cpu->dma_cycles = 0;
+	cpu->oddcycle = 0;
 	cpu->nes = nes; /* set parent system */
 }
 
@@ -29,7 +32,7 @@ void cpu_reset(CPU* cpu)
 
 	/* jump to reset vector */
 	cpu->pc = memory_get16(cpu->nes, ADDR_RESET);
-
+	/*cpu->pc = 0xC000; /* for nestest */
 
 	/* TODO: init memory */
 	/* after reset, IRQ disable flag set to true (ORed with 0x04) */
@@ -71,25 +74,37 @@ static void handle_interrupt(CPU* cpu, uint8_t type)
 #include <stdio.h>
 int cpu_tick(CPU* cpu)
 {
-	if (cpu->interrupt != INT_NUL)
-	{
-		handle_interrupt(cpu, cpu->interrupt);
-	}
-	else if (!cpu->cycles--)
-	{
-		OCInfo oci;
-		oci.opcode = memory_get(cpu->nes, cpu->pc);
-		/*printf("%x\t%s ", cpu->pc, oc_names[oci.opcode]);*/
-		amodes[oci.opcode](cpu, &oci);
-		/* fprintf(log, "PC:%x\tOPCODE:%s\tOPERAND:%x\tBYTES:%x\n", cpu->pc, oc_names[oci.opcode], oci.operand, oc_sizes[oci.opcode]); */
-		/*printf("$%.4x\t\t\t", oci.operand);
-		printf("A:%.2x X:%.2x Y:%.2x P:%.2x SP:%.2x\n", cpu->a, cpu->x, cpu->y, cpu->p, cpu->sp);*/
-		++cpu->pc;
+	static int occount = 0;
+	/*static FILE* log;*/
+	OCInfo oci;
 
-		opcodes[oci.opcode](cpu, &oci);
-		return (cpu->cycles = instruction_cycles[oci.opcode]);
+	if (cpu->dma_cycles)
+	{
+		--cpu->dma_cycles;
+		return 1;
 	}
-	return 0;
+
+	if (cpu->interrupt != INT_NUL)
+		handle_interrupt(cpu, cpu->interrupt);
+
+	oci.opcode = memory_get(cpu->nes, cpu->pc++);
+	printf("%X\t%s ", cpu->pc-1, oc_names[oci.opcode]);
+	amodes[oci.opcode](cpu, &oci);
+	/* fprintf(log, "PC:%x\tOPCODE:%s\tOPERAND:%x\tBYTES:%x\n", cpu->pc, oc_names[oci.opcode], oci.operand, oc_sizes[oci.opcode]); */
+	printf("$%.4x\t\t\t", oci.operand);
+	printf("A:%.2X X:%.2X Y:%.2X P:%.2X SP:%.2X\n", cpu->a, cpu->x, cpu->y, cpu->p, cpu->sp);
+
+	/*log = fopen("cpu.log", "a");
+	fprintf(log, "A:%.2X X:%.2X Y:%.2X P:%.2X SP:%.2X\n", cpu->a, cpu->x, cpu->y, cpu->p, cpu->sp);
+	fclose(log);*/
+
+	cpu->cycles = instruction_cycles[oci.opcode];
+
+	/* Used for adding another cycle during DMA writes */
+	cpu->oddcycle = (cpu->oddcycle ^ cpu->cycles%2);
+
+	opcodes[oci.opcode](cpu, &oci);
+	return cpu->cycles;;
 }
 
 void cpu_interrupt(CPU* cpu, uint8_t type)
@@ -200,11 +215,8 @@ void amode_XID(CPU* cpu, OCInfo* oci)
    added to the value in the Y register (with zero page wraparound) */
 void amode_IDY(CPU* cpu, OCInfo* oci)
 {
-	uint16_t addr = memory_get16_ind(cpu->nes, cpu->pc++);
-	oci->operand = (addr + cpu->y) & 0xFF;
-
-	/* for fetching pointer high byte */
-	++cpu->pc;
+	uint16_t addr = memory_get16_ind(cpu->nes, memory_get(cpu->nes, cpu->pc++) & 0xFF);
+	oci->operand = (addr + cpu->y);
 
 	/* add cycle for page cross */
 	if ((addr & 0xFF00) != (oci->operand & 0xFF00))
@@ -310,7 +322,8 @@ void cpu_PHP(CPU* cpu, OCInfo* oci)
 {
 	/* Set the BRK flag if we are handling a BRK interrupt */
 	uint8_t flags = cpu->p;
-	if (cpu->interrupt == INT_BRK) flags |= MASK_B;
+	if (cpu->interrupt != INT_IRQ && cpu->interrupt != INT_NMI)
+		flags |= MASK_B;
 	memory_set(cpu->nes, 0x100 | cpu->sp--, flags);
 }
 
@@ -324,7 +337,10 @@ void cpu_PLA(CPU* cpu, OCInfo* oci)
 /* PLP - pull processor status from stack */
 void cpu_PLP(CPU* cpu, OCInfo* oci)
 {
-	cpu->p =  memory_get(cpu->nes, 0x100 | ++cpu->sp);
+	uint8_t p = memory_get(cpu->nes, 0x100 | ++cpu->sp);
+
+	/* Discard BRK flag and set unused flag*/
+	cpu->p = p & ~MASK_B | MASK_U;
 }
 
 
@@ -568,7 +584,6 @@ void cpu_RTS(CPU* cpu, OCInfo* oci)
 {
 	cpu->pc = (memory_get(cpu->nes, 0x100 | ++cpu->sp) |
 			  (memory_get(cpu->nes, 0x100 | ++cpu->sp) << 8)) + 1;
-	++cpu->sp;
 }
 
 
@@ -634,7 +649,7 @@ void cpu_BPL(CPU* cpu, OCInfo* oci)
 /* BVC - branch if overflow flag clear */
 void cpu_BVC(CPU* cpu, OCInfo* oci)
 {
-	if (!(cpu->p & MASK_C))
+	if (!(cpu->p & MASK_V))
 		branch(cpu, (uint8_t)oci->operand);
 }
 
