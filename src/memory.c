@@ -1,5 +1,5 @@
-#include <stdlib.h>
 #include "memory.h"
+#include "ppu.h"
 
 /* CPU memory map (from https://en.wikibooks.org/wiki/NES_Programming/Memory_Map)
 
@@ -30,45 +30,49 @@ $8000 to $FFFF: PRG ROM banks
 
 */
 
-
-uint8_t memory_get(Memory* mem, uint16_t addr)
+/* Get a single byte from the given address */
+uint8_t memory_get(NES* nes, uint16_t addr)
 {
 	if (addr < 0x2000)
-		return mem->ram[addr & 0x7FF];
+		return nes->ram[addr & 0x7FF];
 	else if (addr < 0x4000)
-		return ppu_read(mem->ppu, addr);
+		return ppu_read(&nes->ppu, addr);
 	/* TODO: read from other areas */
 	else if (addr > 0x7FFF && addr < 0xC000)
-		return mem->prg1[addr - 0x8000];
+		return nes->prg1[addr - 0x8000];
 	else if (addr > 0xBFFF && addr < 0x10000)
-		return mem->prg2[addr - 0xC000];
+		return nes->prg2[addr - 0xC000];
 	else
 		return 0;
 }
 
-uint16_t memory_get16(Memory* mem, uint16_t addr)
+/* Get two bytes from the given address (little endian) */
+uint16_t memory_get16(NES* nes, uint16_t addr)
 {
-	return memory_get(mem, addr) | (memory_get(mem, addr+1) << 8);
+	return memory_get(nes, addr) | (memory_get(nes, addr+1) << 8);
 }
 
-uint16_t memory_get16_ind(Memory* mem, uint16_t addr)
+/* Get two bytes from the given address (little endian), with the 6502's
+   page boundary wraparound bug */
+uint16_t memory_get16_ind(NES* nes, uint16_t addr)
 {
-	/* the 6502 doesn't handle page boundary crosses for indirect addressing properly
+	/* The 6502 doesn't handle page boundary crosses for indirect addressing properly
 	   e.g. JMP ($80FF) will fetch the high byte from $8000, NOT $8100! */
 	uint16_t hi_addr = (addr & 0xFF00) | (uint8_t)((addr & 0xFF)+1);
-	return memory_get(mem, addr) | (memory_get(mem, hi_addr) << 8);
+	return memory_get(nes, addr) | (memory_get(nes, hi_addr) << 8);
 }
 
-void memory_set(Memory* mem, uint16_t addr, uint8_t val)
+/* Set a byte of memory to a given value */
+void memory_set(NES* nes, uint16_t addr, uint8_t val)
 {
 	/* TODO: disallow writing into read-only memory */
 	if (addr < 0x2000)
-		mem->ram[addr & 0x7FF] = val;
+		nes->ram[addr & 0x7FF] = val;
 	else if (addr < 0x4000)
-		ppu_write(mem->ppu, addr, val);
+		ppu_write(&nes->ppu, addr, val);
 	/* TODO: write to other areas */
 	else if (addr > 0x7FFF && addr < 0xC000)
-		mem->prg1[addr - 0x8000] = val;
+		nes->prg1[addr - 0x8000] = val;
 	else if (addr > 0xBFFF && addr < 0x10000)
-		mem->prg2[addr - 0xC000] = val;
+		nes->prg2[addr - 0xC000] = val;
 }

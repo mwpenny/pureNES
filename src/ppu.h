@@ -4,8 +4,6 @@
 #include <stdint.h>
 #include <SDL.h>
 
-struct CPU;
-struct Memory;
 
 /* PPU VRAM map (from http://nesdev.com/NESDoc.pdf)
 
@@ -39,7 +37,7 @@ byte 3: sprite x coordinate
 
 */
 
-/* TODO: Actually decode the video signal */
+/* TODO: Actually decode the video signal? */
 static uint32_t palette[64] =
 {
 	0x7C7C7C, 0x0000FC, 0x0000BC, 0x4428BC, 0x940084, 0xA80020, 0xA81000, 0x881400,
@@ -63,7 +61,8 @@ static uint32_t palette[64] =
 
 typedef struct
 {
-	/* TODO: remove unused registers. Some mapped memory just uses functions */
+	struct NES* nes;
+
 	uint8_t io_latch;
 	uint8_t addr_latch;
 
@@ -73,15 +72,7 @@ typedef struct
 
 	uint8_t oam_addr;	/* write */
 
-	/*
-	v and t bits:
-
-	yyy NN YYYYY XXXXX
-	||| || ||||| +++++-- coarse X scroll
-	||| || +++++-------- coarse Y scroll
-	||| ++-------------- nametable select
-	+++----------------- fine Y scroll
-	*/
+	uint8_t buf;		/* internal read buffer for vram */
 
 	uint16_t v, t; /* VRAM address and temp address (top left tile). 15 bits */
 	uint8_t x; /* fine x scroll. 3 bits */
@@ -90,11 +81,11 @@ typedef struct
 	uint8_t* vram;
 	uint8_t oam[256]; /* SPR-RAM */
 
-	struct CPU* cpu; /* TODO: only needed for sending NMI. Maybe just store function pointer
-			           to NMI-generating function. Then no need to know about CPU */
+	uint16_t tiles_low, tiles_hi;
+	uint8_t attr_low, attr_hi;
 } PPU;
 
-void ppu_init(PPU* ppu, struct CPU* cpu);
+void ppu_init(PPU* ppu, struct NES* nes);
 
 /* PPU register read/write handlers */
 uint8_t ppu_read_ctrl(PPU* ppu);
@@ -155,5 +146,7 @@ void ppu_write(PPU* ppu, uint16_t addr, uint8_t val);
 
 void ppu_render_pattern_table(PPU* ppu, SDL_Surface* screen);
 void ppu_render_nametable(PPU* ppu, SDL_Surface* screen);
+
+void ppu_tick(PPU* ppu, SDL_Surface* screen);
 
 #endif

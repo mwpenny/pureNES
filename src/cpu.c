@@ -1,13 +1,42 @@
 #include <stdio.h>
+#include <string.h>
 #include "cpu.h"
+#include "nes.h"
+#include "memory.h"
 
-void cpu_init(CPU* cpu, Memory* mem)
+void cpu_init(CPU* cpu, NES* nes)
 {
-	cpu->mem = mem;
-	cpu->interrupt = INT_NUL;
+	memset(cpu, 0, sizeof(*cpu));
+	cpu->nes = nes; /* set parent system */
 }
 
-static void cpu_handle_interrupt(CPU* cpu, uint8_t type)
+void cpu_reset(CPU* cpu)
+{
+	/*cpu->p = 0x20 | MASK_B | MASK_I; /* unused, break, and IRQ disable flags *///
+	cpu->p = 0x20 | MASK_I;
+	cpu->a = cpu->x = cpu->y = 0;
+	cpu->sp = 0;
+
+	/* TODO: don't actually push anything? */
+	/* push pc */
+	memory_set(cpu->nes, 0x100 | cpu->sp--, (cpu->pc) >> 8);
+	memory_set(cpu->nes, 0x100 | cpu->sp--, (cpu->pc) & 0xFF);
+
+	/* push p */
+	cpu_PHP(cpu, NULL);
+
+	/* sp should now be 0xFD */
+
+	/* jump to reset vector */
+	cpu->pc = memory_get16(cpu->nes, ADDR_RESET);
+
+
+	/* TODO: init memory */
+	/* after reset, IRQ disable flag set to true (ORed with 0x04) */
+	/* after reset, APU is silenced */
+}
+
+static void handle_interrupt(CPU* cpu, uint8_t type)
 {
 	OCInfo oci = {0, 0};
 	if (type == INT_NUL) return;
@@ -19,11 +48,14 @@ static void cpu_handle_interrupt(CPU* cpu, uint8_t type)
 		cpu_reset(cpu);
 		break;
 	case INT_NMI:
-		oci.operand = memory_get16(cpu->mem, ADDR_NMI);
+		oci.operand = memory_get16(cpu->nes, ADDR_NMI);
+		cpu->cycles += 7;
 		break;
-	case INT_IRQ: /* don't set address if IRQs are disabled */
+	case INT_IRQ:
+		cpu->cycles += 7;
 	case INT_BRK:
-		if (!(cpu->p & MASK_I)) oci.operand = memory_get16(cpu->mem, ADDR_IRQ);
+		/* don't set address if IRQs are disabled */
+		if (!(cpu->p & MASK_I)) oci.operand = memory_get16(cpu->nes, ADDR_IRQ);
 	}
 
 	/* operand set --> valid interrupt type / IRQs not disabled */
@@ -36,59 +68,36 @@ static void cpu_handle_interrupt(CPU* cpu, uint8_t type)
 	cpu->interrupt = INT_NUL;
 }
 
+#include <stdio.h>
+int cpu_tick(CPU* cpu)
+{
+	if (cpu->interrupt != INT_NUL)
+	{
+		handle_interrupt(cpu, cpu->interrupt);
+	}
+	else if (!cpu->cycles--)
+	{
+		OCInfo oci;
+		oci.opcode = memory_get(cpu->nes, cpu->pc);
+		/*printf("%x\t%s ", cpu->pc, oc_names[oci.opcode]);*/
+		amodes[oci.opcode](cpu, &oci);
+		/* fprintf(log, "PC:%x\tOPCODE:%s\tOPERAND:%x\tBYTES:%x\n", cpu->pc, oc_names[oci.opcode], oci.operand, oc_sizes[oci.opcode]); */
+		/*printf("$%.4x\t\t\t", oci.operand);
+		printf("A:%.2x X:%.2x Y:%.2x P:%.2x SP:%.2x\n", cpu->a, cpu->x, cpu->y, cpu->p, cpu->sp);*/
+		++cpu->pc;
+
+		opcodes[oci.opcode](cpu, &oci);
+		return (cpu->cycles = instruction_cycles[oci.opcode]);
+	}
+	return 0;
+}
+
 void cpu_interrupt(CPU* cpu, uint8_t type)
 {
 	cpu->interrupt = type;
 }
 
-#include <stdio.h>
-void cpu_tick(CPU* cpu, FILE* log)
-{
-	if (cpu->interrupt)
-	{
-		cpu_handle_interrupt(cpu, cpu->interrupt);
-	}
-	else
-	{
-		OCInfo oci;
-		oci.opcode = memory_get(cpu->mem, cpu->pc);
-		printf("%x\t%s ", cpu->pc, oc_names[oci.opcode]);
-		amodes[oci.opcode](cpu, &oci);
-		/* fprintf(log, "PC:%x\tOPCODE:%s\tOPERAND:%x\tBYTES:%x\n", cpu->pc, oc_names[oci.opcode], oci.operand, oc_sizes[oci.opcode]); */
-		printf("$%.4x\t\t\t", oci.operand);
-		printf("A:%.2x X:%.2x Y:%.2x P:%.2x SP:%.2x\n", cpu->a, cpu->x, cpu->y, cpu->p, cpu->sp);
-		++cpu->pc;
-		opcodes[oci.opcode](cpu, &oci);
-	}
-}
-
-void cpu_reset(CPU* cpu)
-{
-	/*cpu->p = 0x20 | MASK_B | MASK_I; /* unused, break, and IRQ disable flags *///
-	cpu->p = 0x20 | MASK_I;
-	cpu->a = cpu->x = cpu->y = 0;
-	cpu->sp = 0;
-
-	/* TODO: don't actually push anything? */
-	/* push pc */
-	memory_set(cpu->mem, 0x100 | cpu->sp--, (cpu->pc) >> 8);
-	memory_set(cpu->mem, 0x100 | cpu->sp--, (cpu->pc) & 0xFF);
-
-	/* push p */
-	cpu_PHP(cpu, NULL);
-
-	/* sp should now be 0xFD */
-
-	/* jump to reset vector */
-	cpu->pc = memory_get16(cpu->mem, ADDR_RESET);
-
-
-	/* TODO: init memory */
-	/* after reset, IRQ disable flag set to true (ORed with 0x04) */
-	/* after reset, APU is silenced */
-}
-
-void cpu_chk_aflags(CPU* cpu, int16_t val)
+static void chk_aflags(CPU* cpu, int16_t val)
 {
 	/* set/clear zero and negative flags */
 	if (!val) cpu->p |= MASK_Z;
@@ -98,71 +107,108 @@ void cpu_chk_aflags(CPU* cpu, int16_t val)
 	else cpu->p &= ~MASK_N;
 }
 
-
 /*** Addressing mode handlers ***/
+
+/* Handles null (undefined), implicit, and accumulator addressing modes */
 void amode_NUL(CPU* cpu, OCInfo* oci)
 {
-	/* handles null (undefined), implied, and accumulator addressing modes */
 	oci->operand = 0;
 }
+
+/* Immediate addressing. Use next byte as the value */
 void amode_IMM(CPU* cpu, OCInfo* oci)
 {
-	oci->operand = cpu->pc+1;
-	++cpu->pc;
-}
-void amode_ZPG(CPU* cpu, OCInfo* oci)
-{
-	oci->operand = memory_get(cpu->mem, cpu->pc+1) & 0xFF;
-	++cpu->pc;
-}
-void amode_ZPX(CPU* cpu, OCInfo* oci)
-{
-	oci->operand = (memory_get(cpu->mem, cpu->pc+1) + cpu->x) & 0xFF;
-	++cpu->pc;
-}
-void amode_ZPY(CPU* cpu, OCInfo* oci)
-{
-	oci->operand = (memory_get(cpu->mem, cpu->pc+1) + cpu->y) & 0xFF;
-	++cpu->pc;
-}
-void amode_REL(CPU* cpu, OCInfo* oci)
-{
-	uint16_t ofs = memory_get(cpu->mem, cpu->pc+1);
-	oci->operand = cpu->pc + 2;
-	oci->operand += ofs & MASK_N ? (ofs - 0x100) : ofs; /* account for negative offset */
-	++cpu->pc;
-}
-void amode_ABS(CPU* cpu, OCInfo* oci)
-{
-	oci->operand = memory_get16(cpu->mem, cpu->pc+1);
-	cpu->pc += 2;
-}
-void amode_ABX(CPU* cpu, OCInfo* oci)
-{
-	oci->operand = memory_get16(cpu->mem, cpu->pc+1) + cpu->x;
-	cpu->pc += 2;
-}
-void amode_ABY(CPU* cpu, OCInfo* oci)
-{
-	oci->operand = memory_get16(cpu->mem, cpu->pc+1) + cpu->y;
-	cpu->pc += 2;
+	oci->operand = cpu->pc++;
 }
 
+/* Zero page addressing. Use the next byte as the address */
+void amode_ZPG(CPU* cpu, OCInfo* oci)
+{
+	oci->operand = memory_get(cpu->nes, cpu->pc++) & 0xFF;
+}
+
+/* Zero page, X addressing. Use the next byte plus the value in the X register */
+void amode_ZPX(CPU* cpu, OCInfo* oci)
+{
+	oci->operand = (memory_get(cpu->nes, cpu->pc++) + cpu->x) & 0xFF;
+}
+
+/* Zero page, Y addressing. Use the next byte plus the value in the Y register */
+void amode_ZPY(CPU* cpu, OCInfo* oci)
+{
+	oci->operand = (memory_get(cpu->nes, cpu->pc++) + cpu->y) & 0xFF;
+}
+
+/* Relative addressing. Use PC plus the value of the next byte */
+void amode_REL(CPU* cpu, OCInfo* oci)
+{
+	/* Get offset */
+	oci->operand = memory_get(cpu->nes, cpu->pc++);
+	/*oci->operand += (ofs & MASK_N) ? (ofs - 0x100) : ofs; /* account for negative offset */
+}
+
+/* Absolute addressing. Use the next two bytes */
+void amode_ABS(CPU* cpu, OCInfo* oci)
+{
+	oci->operand = memory_get16(cpu->nes, cpu->pc++);
+	++cpu->pc; /* for fetching pointer high byte */
+}
+
+/* Absolute, addressing helper function. Use the the next two bytes plus
+   the value passed (from the appropriate register) */
+static void amode_ABI(CPU* cpu, OCInfo* oci, uint8_t i)
+{
+	uint16_t addr = memory_get16(cpu->nes, cpu->pc++);
+	++cpu->pc; /* for fecthing high byte of address */
+	oci->operand = addr + i;
+
+	/* Page boundary crosses cost one cycle */
+	if ((addr & 0xFF00) != (oci->operand & 0xFF00))
+		cpu->cycles += pagecross_cycles[oci->opcode];
+}
+
+/* Absolute, X addressing. Use the the next two bytes plus
+   the value in the X register */
+void amode_ABX(CPU* cpu, OCInfo* oci)
+{
+	amode_ABI(cpu, oci, cpu->x);
+}
+
+/* Absolute, Y addressing. Use the next two bytes plus the value
+   in the Y register */
+void amode_ABY(CPU* cpu, OCInfo* oci)
+{
+	amode_ABI(cpu, oci, cpu->y);
+}
+
+/* Indirect addressing. Use the address pointed to by the next 2 bytes */
 void amode_IND(CPU* cpu, OCInfo* oci)
 {
-	oci->operand = memory_get16_ind(cpu->mem, memory_get16(cpu->mem, cpu->pc+1));
-	cpu->pc += 2;
+	oci->operand = memory_get16_ind(cpu->nes, memory_get16(cpu->nes, cpu->pc++));
+	++cpu->pc; /* for fetching pointer high byte */
 }
+
+/* Indexed indirect addressing. Add the value in the X register to the next byte
+   and use the address at that location (with zero page wraparound) */
 void amode_XID(CPU* cpu, OCInfo* oci)
 {
-	oci->operand = memory_get16_ind(cpu->mem,
-				  (memory_get(cpu->mem, cpu->pc+1) + cpu->x) & 0xFF);
-	++cpu->pc;
+	oci->operand = memory_get16_ind(cpu->nes,
+				  (memory_get(cpu->nes, cpu->pc++) + cpu->x) & 0xFF);
 }
+
+/* Indirect indexed addressing. Use the address pointed to by the next two bytes
+   added to the value in the Y register (with zero page wraparound) */
 void amode_IDY(CPU* cpu, OCInfo* oci)
 {
-	oci->operand = (memory_get16_ind(cpu->mem, cpu->pc+1) + cpu->y) & 0xFF;
-	cpu->pc += 2;
+	uint16_t addr = memory_get16_ind(cpu->nes, cpu->pc++);
+	oci->operand = (addr + cpu->y) & 0xFF;
+
+	/* for fetching pointer high byte */
+	++cpu->pc;
+
+	/* add cycle for page cross */
+	if ((addr & 0xFF00) != (oci->operand & 0xFF00))
+		cpu->cycles += pagecross_cycles[oci->opcode];
 }
 
 /*** Load/store operations ***/
@@ -170,40 +216,40 @@ void amode_IDY(CPU* cpu, OCInfo* oci)
 /* LDA - load accumulator */
 void cpu_LDA(CPU* cpu, OCInfo* oci)
 {
-	cpu->a = memory_get(cpu->mem, oci->operand);
-	cpu_chk_aflags(cpu, cpu->a);
+	cpu->a = memory_get(cpu->nes, oci->operand);
+	chk_aflags(cpu, cpu->a);
 }
 
 /* LDX - load x register */
 void cpu_LDX(CPU* cpu, OCInfo* oci)
 {
-	cpu->x = memory_get(cpu->mem, oci->operand);
-	cpu_chk_aflags(cpu, cpu->x);
+	cpu->x = memory_get(cpu->nes, oci->operand);
+	chk_aflags(cpu, cpu->x);
 }
 
 /* LDY - load y register */
 void cpu_LDY(CPU* cpu, OCInfo* oci)
 {
-	cpu->y = memory_get(cpu->mem, oci->operand);
-	cpu_chk_aflags(cpu, cpu->y);
+	cpu->y = memory_get(cpu->nes, oci->operand);
+	chk_aflags(cpu, cpu->y);
 }
 
 /* STA - store accumulator */
 void cpu_STA(CPU* cpu, OCInfo* oci)
 {
-	memory_set(cpu->mem, oci->operand, cpu->a);
+	memory_set(cpu->nes, oci->operand, cpu->a);
 }
 
 /* STX - store x register */
 void cpu_STX(CPU* cpu, OCInfo* oci)
 {
-	memory_set(cpu->mem, oci->operand, cpu->x);
+	memory_set(cpu->nes, oci->operand, cpu->x);
 }
 
 /* STY - store y register */
 void cpu_STY(CPU* cpu, OCInfo* oci)
 {
-	memory_set(cpu->mem, oci->operand, cpu->y);
+	memory_set(cpu->nes, oci->operand, cpu->y);
 }
 
 
@@ -213,28 +259,28 @@ void cpu_STY(CPU* cpu, OCInfo* oci)
 void cpu_TAX(CPU* cpu, OCInfo* oci)
 {
 	cpu->x = cpu->a;
-	cpu_chk_aflags(cpu, cpu->x);
+	chk_aflags(cpu, cpu->x);
 }
 
 /* TAY - transfer accumulator to y */
 void cpu_TAY(CPU* cpu, OCInfo* oci)
 {
 	cpu->y = cpu->a;
-	cpu_chk_aflags(cpu, cpu->y);
+	chk_aflags(cpu, cpu->y);
 }
 
 /* TXA - transfer x to accumulator */
 void cpu_TXA(CPU* cpu, OCInfo* oci)
 {
 	cpu->a = cpu->x;
-	cpu_chk_aflags(cpu, cpu->a);
+	chk_aflags(cpu, cpu->a);
 }
 
 /* TYA - transfer y to accumulator */
 void cpu_TYA(CPU* cpu, OCInfo* oci)
 {
 	cpu->a = cpu->y;
-	cpu_chk_aflags(cpu, cpu->a);
+	chk_aflags(cpu, cpu->a);
 }
 
 
@@ -244,7 +290,7 @@ void cpu_TYA(CPU* cpu, OCInfo* oci)
 void cpu_TSX(CPU* cpu, OCInfo* oci)
 {
 	cpu->x = cpu->sp;
-	cpu_chk_aflags(cpu, cpu->x);
+	chk_aflags(cpu, cpu->x);
 }
 
 /* TXS - transfer x to stack pointer */
@@ -256,7 +302,7 @@ void cpu_TXS(CPU* cpu, OCInfo* oci)
 /* PHA - push accumulator on stack */
 void cpu_PHA(CPU* cpu, OCInfo* oci)
 {
-	memory_set(cpu->mem, 0x100 | cpu->sp--, cpu->a);	
+	memory_set(cpu->nes, 0x100 | cpu->sp--, cpu->a);	
 }
 
 /* PHP - push processor status on stack */
@@ -265,20 +311,20 @@ void cpu_PHP(CPU* cpu, OCInfo* oci)
 	/* Set the BRK flag if we are handling a BRK interrupt */
 	uint8_t flags = cpu->p;
 	if (cpu->interrupt == INT_BRK) flags |= MASK_B;
-	memory_set(cpu->mem, 0x100 | cpu->sp--, flags);
+	memory_set(cpu->nes, 0x100 | cpu->sp--, flags);
 }
 
 /* PLA - pull accumulator from stack */
 void cpu_PLA(CPU* cpu, OCInfo* oci)
 {
-	cpu->a = memory_get(cpu->mem, 0x100 | ++cpu->sp);
-	cpu_chk_aflags(cpu, cpu->a);
+	cpu->a = memory_get(cpu->nes, 0x100 | ++cpu->sp);
+	chk_aflags(cpu, cpu->a);
 }
 
 /* PLP - pull processor status from stack */
 void cpu_PLP(CPU* cpu, OCInfo* oci)
 {
-	cpu->p =  memory_get(cpu->mem, 0x100 | ++cpu->sp);
+	cpu->p =  memory_get(cpu->nes, 0x100 | ++cpu->sp);
 }
 
 
@@ -287,44 +333,45 @@ void cpu_PLP(CPU* cpu, OCInfo* oci)
 /* AND - logical AND with accumulator */
 void cpu_AND(CPU* cpu, OCInfo* oci)
 {
-	cpu->a &= memory_get(cpu->mem, oci->operand);
-	cpu_chk_aflags(cpu, cpu->a);
+	cpu->a &= memory_get(cpu->nes, oci->operand);
+	chk_aflags(cpu, cpu->a);
 }
 
 /* EOR - exclusive OR with accumulator */
 void cpu_EOR(CPU* cpu, OCInfo* oci)
 {
-	cpu->a ^= memory_get(cpu->mem, oci->operand);
-	cpu_chk_aflags(cpu, cpu->a);
+	cpu->a ^= memory_get(cpu->nes, oci->operand);
+	chk_aflags(cpu, cpu->a);
 }
 
 /* ORA - inclusive OR with accumulator */
 void cpu_ORA(CPU* cpu, OCInfo* oci)
 {
-	cpu->a |= memory_get(cpu->mem, oci->operand);
-	cpu_chk_aflags(cpu, cpu->a);
+	cpu->a |= memory_get(cpu->nes, oci->operand);
+	chk_aflags(cpu, cpu->a);
 }
 
 /* BIT - bit test with mask pattern in accumulator */
 void cpu_BIT(CPU* cpu, OCInfo* oci) /* TODO: without branching? */
 {
-	/* clear zero flag if register a has a mask bit set */
-	if (cpu->a & memory_get(cpu->mem, oci->operand)) cpu->p &= ~MASK_Z;
+	uint8_t num = memory_get(cpu->nes, oci->operand);
+
+	/* clear zero flag if register A has a mask bit set */
+	if (cpu->a & num) cpu->p &= ~MASK_Z;
 	else cpu->p |= MASK_Z;
 
-	/* copy bits 6 and 7 from the memory location */
-	cpu->p &= ~(MASK_N | MASK_N);
-	cpu->p |= (memory_get(cpu->mem, oci->operand) & (MASK_N | MASK_N));
+	/* copy N and V bits from the memory location */
+	cpu->p &= ~(MASK_N | MASK_V);
+	cpu->p |= (num & (MASK_N | MASK_V));
 }
 
 
 /*** Arithmetic operations ***/
 /* TODO: BCD MODE? */
 
-/* ADC - add with carry to accumulator */
-void cpu_ADC(CPU* cpu, OCInfo* oci)
+/* ADC helper function. Works with a number directly */
+static void adc(CPU* cpu, uint8_t num, OCInfo* oci)
 {
-	uint8_t num = memory_get(cpu->mem, oci->operand);
 	int16_t val = cpu->a + num + (cpu->p & MASK_C);
 	if (val & 0x100) cpu_SEC(cpu, oci);
 	else cpu_CLC(cpu, oci);
@@ -336,41 +383,49 @@ void cpu_ADC(CPU* cpu, OCInfo* oci)
 		cpu_CLV(cpu, oci);
 
 	cpu->a = (uint8_t)val;
-	cpu_chk_aflags(cpu, cpu->a);
+	chk_aflags(cpu, cpu->a);
+}
+
+/* ADC - add with carry to accumulator */
+void cpu_ADC(CPU* cpu, OCInfo* oci)
+{
+	uint8_t num = memory_get(cpu->nes, oci->operand);
+	adc(cpu, num, oci);
 }
 
 /* SBC - subtract with carry from accumulator */
 void cpu_SBC(CPU* cpu, OCInfo* oci)
 {
-	oci->operand = ~memory_get(cpu->mem, oci->operand);
-	cpu_ADC(cpu, oci); /* -operand - 1 */
+	/* -num - 1 */
+	uint8_t num = ~memory_get(cpu->nes, oci->operand);
+	adc(cpu, num, oci);
 }
 
 /* CMP - compare with accumulator */
 void cpu_CMP(CPU* cpu, OCInfo* oci)
 {
-	int16_t val = cpu->a - memory_get(cpu->mem, oci->operand);
+	int16_t val = cpu->a - memory_get(cpu->nes, oci->operand);
 	if (val >= 0) cpu_SEC(cpu, oci);
 	else cpu_CLC(cpu, oci);
-	cpu_chk_aflags(cpu, val);
+	chk_aflags(cpu, val);
 }
 
 /* CPX - compare with x register */
 void cpu_CPX(CPU* cpu, OCInfo* oci)
 {
-	int16_t val = cpu->x - memory_get(cpu->mem, oci->operand);
+	int16_t val = cpu->x - memory_get(cpu->nes, oci->operand);
 	if (val >= 0) cpu_SEC(cpu, oci);
 	else cpu_CLC(cpu, oci);
-	cpu_chk_aflags(cpu, val);
+	chk_aflags(cpu, val);
 }
 
 /* CPY - compare with y register */
 void cpu_CPY(CPU* cpu, OCInfo* oci)
 {
-	int16_t val = cpu->y - memory_get(cpu->mem, oci->operand);
+	int16_t val = cpu->y - memory_get(cpu->nes, oci->operand);
 	if (val >= 0) cpu_SEC(cpu, oci);
 	else cpu_CLC(cpu, oci);
-	cpu_chk_aflags(cpu, val);
+	chk_aflags(cpu, val);
 }
 
 
@@ -379,45 +434,45 @@ void cpu_CPY(CPU* cpu, OCInfo* oci)
 /* INC - increment memory location */
 void cpu_INC(CPU* cpu, OCInfo* oci)
 {
-	uint8_t val = memory_get(cpu->mem, oci->operand)+1;
-	memory_set(cpu->mem, oci->operand, val);
-	cpu_chk_aflags(cpu, val);
+	uint8_t val = memory_get(cpu->nes, oci->operand)+1;
+	memory_set(cpu->nes, oci->operand, val);
+	chk_aflags(cpu, val);
 }
 
 /* INX - increment x register */
 void cpu_INX(CPU* cpu, OCInfo* oci)
 {
 	++cpu->x;
-	cpu_chk_aflags(cpu, cpu->x);
+	chk_aflags(cpu, cpu->x);
 }
 
 /* INY - increment y register */
 void cpu_INY(CPU* cpu, OCInfo* oci)
 {
 	++cpu->y;
-	cpu_chk_aflags(cpu, cpu->y);
+	chk_aflags(cpu, cpu->y);
 }
 
 /* DEC - decrement memory location */
 void cpu_DEC(CPU* cpu, OCInfo* oci)
 {
-	uint8_t val = memory_get(cpu->mem, oci->operand)-1;
-	memory_set(cpu->mem, oci->operand, val);
-	cpu_chk_aflags(cpu, val);
+	uint8_t val = memory_get(cpu->nes, oci->operand)-1;
+	memory_set(cpu->nes, oci->operand, val);
+	chk_aflags(cpu, val);
 }
 
 /* DEX - decrement x register */
 void cpu_DEX(CPU* cpu, OCInfo* oci)
 {
 	--cpu->x;
-	cpu_chk_aflags(cpu, cpu->x);
+	chk_aflags(cpu, cpu->x);
 }
 
 /* DEY - recrement y register */
 void cpu_DEY(CPU* cpu, OCInfo* oci)
 {
 	--cpu->y;
-	cpu_chk_aflags(cpu, cpu->y);
+	chk_aflags(cpu, cpu->y);
 }
 
 
@@ -427,64 +482,68 @@ void cpu_DEY(CPU* cpu, OCInfo* oci)
 void cpu_ASL(CPU* cpu, OCInfo* oci)
 {
 	/* address == 0 --> use accumulator */
-	uint8_t num = !oci->operand ? cpu->a : memory_get(cpu->mem, oci->operand);
+	uint8_t num = !oci->operand ? cpu->a : memory_get(cpu->nes, oci->operand);
 
 	cpu_CLC(cpu, NULL);
 	cpu->p |= (num & 0x80) >> 7;
 	num <<= 1;
-	cpu_chk_aflags(cpu, num);
+	chk_aflags(cpu, num);
 
 	if (!oci->operand) cpu->a = num;
-	else memory_set(cpu->mem, oci->operand, num);
+	else
+		memory_set(cpu->nes, oci->operand, num);
 }
 
 /* LSR - logical shift right */
 void cpu_LSR(CPU* cpu, OCInfo* oci)
 {
 	/* address == 0 --> use accumulator */
-	uint8_t num = !oci->operand ? cpu->a : memory_get(cpu->mem, oci->operand);
+	uint8_t num = !oci->operand ? cpu->a : memory_get(cpu->nes, oci->operand);
 
 	cpu_CLC(cpu, NULL);
 	cpu->p |= num & MASK_C;
 	num >>= 1;
-	cpu_chk_aflags(cpu, num);
+	chk_aflags(cpu, num);
 
 	if (!oci->operand) cpu->a = num;
-	else memory_set(cpu->mem, oci->operand, num);
+	else
+		memory_set(cpu->nes, oci->operand, num);
 }
 
 /* ROL - rotate left */
 void cpu_ROL(CPU* cpu, OCInfo* oci)
 {
 	/* address == 0 --> use accumulator */
-	uint8_t num = !oci->operand ? cpu->a : memory_get(cpu->mem, oci->operand);
+	uint8_t num = !oci->operand ? cpu->a : memory_get(cpu->nes, oci->operand);
 	uint8_t carry = cpu->p & MASK_C;
 
 	cpu_CLC(cpu, NULL);
 	cpu->p |= (num & 0x80) >> 7;
 	num <<= 1;
 	num |= carry;
-	cpu_chk_aflags(cpu, num);
+	chk_aflags(cpu, num);
 
 	if (!oci->operand) cpu->a = num;
-	else memory_set(cpu->mem, oci->operand, num);
+	else
+		memory_set(cpu->nes, oci->operand, num);
 }
 
 /* ROR - rotate right */
 void cpu_ROR(CPU* cpu, OCInfo* oci)
 {
 	/* address == 0 --> use accumulator */
-	uint8_t num = !oci->operand ? cpu->a : memory_get(cpu->mem, oci->operand);
+	uint8_t num = !oci->operand ? cpu->a : memory_get(cpu->nes, oci->operand);
 	uint8_t carry = cpu->p & MASK_C;
 
 	cpu_CLC(cpu, NULL);
 	cpu->p |= num & MASK_C;
 	num >>= 1;
 	num |= carry << 7;
-	cpu_chk_aflags(cpu, num);
+	chk_aflags(cpu, num);
 
 	if (!oci->operand) cpu->a = num;
-	else memory_set(cpu->mem, oci->operand, num);
+	else
+		memory_set(cpu->nes, oci->operand, num);
 }
 
 
@@ -499,68 +558,91 @@ void cpu_JMP(CPU* cpu, OCInfo* oci)
 /* JSR - jump to subroutine */
 void cpu_JSR(CPU* cpu, OCInfo* oci)
 {
-	memory_set(cpu->mem, 0x100 | cpu->sp--, (cpu->pc-1) >> 8);
-	memory_set(cpu->mem, 0x100 | cpu->sp--, (cpu->pc-1) & 0xFF);
+	memory_set(cpu->nes, 0x100 | cpu->sp--, (cpu->pc-1) >> 8);
+	memory_set(cpu->nes, 0x100 | cpu->sp--, (cpu->pc-1) & 0xFF);
 	cpu->pc = oci->operand;
 }
 
 /* RTS - return from subroutine */
 void cpu_RTS(CPU* cpu, OCInfo* oci)
 {
-	cpu->pc = (memory_get(cpu->mem, 0x100 | ++cpu->sp) |
-			  (memory_get(cpu->mem, 0x100 | ++cpu->sp) << 8)) + 1;
+	cpu->pc = (memory_get(cpu->nes, 0x100 | ++cpu->sp) |
+			  (memory_get(cpu->nes, 0x100 | ++cpu->sp) << 8)) + 1;
 	++cpu->sp;
 }
 
 
 /*** Conditional branches ***/
 
+static void branch(CPU* cpu, int8_t ofs)
+{
+	uint16_t addr = cpu->pc + ofs;
+
+	/* Add cycle if branch is to another page. Not using lookup table
+	   because the cycle penalty for every branch instruction is always
+	   1. */
+	if ((addr & 0xFF00) != (cpu->pc & 0xFF00))
+		++cpu->cycles;
+
+	/* Perform branch operation */
+	cpu->pc = addr;
+	++cpu->cycles;
+}
+
 /* BCC - branch if carry flag clear */
 void cpu_BCC(CPU* cpu, OCInfo* oci)
 {
-	if (!(cpu->p & MASK_C)) cpu->pc = oci->operand;
+	if (!(cpu->p & MASK_C))
+		branch(cpu, (uint8_t)oci->operand);
 }
 
 /* BCS - branch if carry flag set */
 void cpu_BCS(CPU* cpu, OCInfo* oci)
 {
-	if (cpu->p & MASK_C) cpu->pc = oci->operand;
+	if (cpu->p & MASK_C)
+		branch(cpu, (uint8_t)oci->operand);
 }
 
 /* BEQ - branch if zero flag set */
 void cpu_BEQ(CPU* cpu, OCInfo* oci)
 {
-	if (cpu->p & MASK_Z) cpu->pc = oci->operand;
+	if (cpu->p & MASK_Z)
+		branch(cpu, (uint8_t)oci->operand);
 }
 
 /* BMI - branch if negative flag set */
 void cpu_BMI(CPU* cpu, OCInfo* oci)
 {
-	if (cpu->p & MASK_N) cpu->pc = oci->operand;
+	if (cpu->p & MASK_N)
+		branch(cpu, (uint8_t)oci->operand);
 }
 
 /* BNE - branch if zero flag clear */
 void cpu_BNE(CPU* cpu, OCInfo* oci)
 {
-	if (!(cpu->p & MASK_Z)) cpu->pc = oci->operand;
+	if (!(cpu->p & MASK_Z))
+		branch(cpu, (uint8_t)oci->operand);
 }
 
 /* BPL - branch if negative flag set */
 void cpu_BPL(CPU* cpu, OCInfo* oci)
 {
-	if (!(cpu->p & MASK_N)) cpu->pc = oci->operand;
+	if (!(cpu->p & MASK_N))
+		branch(cpu, (uint8_t)oci->operand);
 }
 
 /* BVC - branch if overflow flag clear */
 void cpu_BVC(CPU* cpu, OCInfo* oci)
 {
-	if (!(cpu->p & MASK_C)) cpu->pc = oci->operand;
+	if (!(cpu->p & MASK_C))
+		branch(cpu, (uint8_t)oci->operand);
 }
 
 /* BVC - branch if overflow flag set */
 void cpu_BVS(CPU* cpu, OCInfo* oci)
 {
-	if (cpu->p & MASK_V) cpu->pc = oci->operand;
+	if (cpu->p & MASK_V)
+		branch(cpu, (uint8_t)oci->operand);
 }
 
 
@@ -614,11 +696,11 @@ void cpu_SEI(CPU* cpu, OCInfo* oci)
 /* BRK - interrupt */
 void cpu_BRK(CPU* cpu, OCInfo* oci)
 {
-	memory_set(cpu->mem, 0x100 | cpu->sp--, (cpu->pc) >> 8);
-	memory_set(cpu->mem, 0x100 | cpu->sp--, (cpu->pc) & 0xFF);
+	memory_set(cpu->nes, 0x100 | cpu->sp--, (cpu->pc) >> 8);
+	memory_set(cpu->nes, 0x100 | cpu->sp--, (cpu->pc) & 0xFF);
 	cpu_PHP(cpu, oci);
 	cpu_SEI(cpu, oci);
-	cpu->pc = memory_get16(cpu->mem, ADDR_IRQ);
+	cpu->pc = memory_get16(cpu->nes, ADDR_IRQ);
 }
 
 /* NOP - no operation */
@@ -629,8 +711,8 @@ void cpu_RTI(CPU* cpu, OCInfo* oci)
 {
 	cpu_PLP(cpu, oci);
 	cpu->p &= ~MASK_B; /* B flag only set on stack */
-	cpu->pc = (memory_get(cpu->mem, 0x100 | ++cpu->sp) |
-			  (memory_get(cpu->mem, 0x100 | ++cpu->sp) << 8));
+	cpu->pc = (memory_get(cpu->nes, 0x100 | ++cpu->sp) |
+			  (memory_get(cpu->nes, 0x100 | ++cpu->sp) << 8));
 }
 
 

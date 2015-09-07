@@ -4,18 +4,20 @@
 #define CPU_H
 
 #include <stdint.h>
-#include "memory.h"
 
-#define ADDR_NMI 0xFFFA
-#define ADDR_RESET 0xFFFC
-#define ADDR_IRQ 0xFFFE
-
+/*** Interrupts ***/
 #define INT_NUL 0
 #define INT_RST 1
 #define INT_NMI 2
 #define INT_IRQ 3
 #define INT_BRK 4
 
+/*** Interrupt vectors ***/
+#define ADDR_NMI 0xFFFA
+#define ADDR_RESET 0xFFFC
+#define ADDR_IRQ 0xFFFE
+
+/*** Processor flag masks ***/
 #define MASK_C 0x01
 #define MASK_Z 0x02
 #define MASK_I 0x04
@@ -26,13 +28,15 @@
 
 typedef struct
 {
-	uint8_t interrupt;	/* which interrupt was received */
-	uint16_t pc;		/* program counter */ /* int may be faster */
+	struct NES* nes;	/* the system the CPU is connected to */
+
+	uint8_t interrupt;	/* last interrupt received */
+	uint16_t pc;		/* program counter */ /* TODO: int may be faster */
 	uint8_t sp;			/* stack pointer */
 	uint8_t p;			/* processor flags */
-	uint8_t a, x, y;	/* registers */
-	uint8_t ram[2048];	/* RAM */
-	Memory* mem;		/* pointers to mapped memory */
+	uint8_t a, x, y;	/* other registers */
+
+	int cycles;
 } CPU;
 
 typedef struct
@@ -41,12 +45,12 @@ typedef struct
 	uint16_t operand;
 } OCInfo;
 
-void cpu_interrupt(CPU* cpu, uint8_t type);
-void cpu_init(CPU* cpu, Memory* mem);
-void cpu_tick(CPU* cpu, FILE* log);
+void cpu_init(CPU* cpu, struct NES* nes);
 void cpu_reset(CPU* cpu);
+int cpu_tick(CPU* cpu);
+void cpu_interrupt(CPU* cpu, uint8_t type);
 
-/* Addressing mode handlers */
+/*** Addressing mode handlers ***/
 void amode_NUL(CPU* cpu, OCInfo* oci);
 void amode_IMM(CPU* cpu, OCInfo* oci);
 void amode_ZPG(CPU* cpu, OCInfo* oci);
@@ -62,6 +66,8 @@ void amode_IDY(CPU* cpu, OCInfo* oci);
 
 /*** TODO: cycle counting ***/
 /*** TODO: make static/inline? ***/
+
+/*** Opcodes ***/
 
 /* Load/store operations */
 void cpu_LDA(CPU* cpu, OCInfo* oci);
@@ -145,7 +151,7 @@ void cpu_RTI(CPU* cpu, OCInfo* oci);
 /* TODO: Undocumented instructions */
 void cpu_KIL(CPU* cpu, OCInfo* oci);
 
-/* Lookup tables */
+/*** Lookup tables ***/
 static void (*opcodes[256])(CPU* cpu, OCInfo* oci) = 
 {
 	cpu_BRK, cpu_ORA, cpu_KIL, cpu_NOP, cpu_NOP, cpu_ORA, cpu_ASL, cpu_NOP, 
@@ -252,6 +258,46 @@ static void (*amodes[256])(CPU* cpu, OCInfo* oci) =
 	amode_NUL, amode_IMM, amode_NUL, amode_NUL, amode_ABS, amode_ABS, amode_ABS, amode_NUL,
 	amode_REL, amode_IDY, amode_NUL, amode_NUL, amode_NUL, amode_ZPX, amode_ZPX, amode_NUL,
 	amode_NUL, amode_ABY, amode_NUL, amode_NUL, amode_NUL, amode_ABX, amode_ABX, amode_NUL
+};
+
+static uint8_t instruction_cycles[256] = 
+{
+	7, 6, 2, 8, 3, 3, 5, 5, 3, 2, 2, 2, 4, 4, 6, 6,
+	2, 5, 2, 8, 4, 4, 6, 6, 2, 4, 2, 7, 4, 4, 7, 7,
+	6, 6, 2, 8, 3, 3, 5, 5, 4, 2, 2, 2, 4, 4, 6, 6,
+	2, 5, 2, 8, 4, 4, 6, 6, 2, 4, 2, 7, 4, 4, 7, 7,
+	6, 6, 2, 8, 3, 3, 5, 5, 3, 2, 2, 2, 3, 4, 6, 6,
+	2, 5, 2, 8, 4, 4, 6, 6, 2, 4, 2, 7, 4, 4, 7, 7,
+	6, 6, 2, 8, 3, 3, 5, 5, 4, 2, 2, 2, 5, 4, 6, 6,
+	2, 5, 2, 8, 4, 4, 6, 6, 2, 4, 2, 7, 4, 4, 7, 7,
+	2, 6, 2, 6, 3, 3, 3, 3, 2, 2, 2, 2, 4, 4, 4, 4,
+	2, 6, 2, 6, 4, 4, 4, 4, 2, 5, 2, 5, 5, 5, 5, 5,
+	2, 6, 2, 6, 3, 3, 3, 3, 2, 2, 2, 2, 4, 4, 4, 4,
+	2, 5, 2, 5, 4, 4, 4, 4, 2, 4, 2, 4, 4, 4, 4, 4,
+	2, 6, 2, 8, 3, 3, 5, 5, 2, 2, 2, 2, 4, 4, 6, 6,
+	2, 5, 2, 8, 4, 4, 6, 6, 2, 4, 2, 7, 4, 4, 7, 7,
+	2, 6, 2, 8, 3, 3, 5, 5, 2, 2, 2, 2, 4, 4, 6, 6,
+	2, 5, 2, 8, 4, 4, 6, 6, 2, 4, 2, 7, 4, 4, 7, 7
+};
+
+static uint8_t pagecross_cycles[256] =
+{
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	1, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 1, 1,
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0
 };
 
 #endif

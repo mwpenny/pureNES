@@ -2,7 +2,6 @@
 /* iNES ROM parser */
 
 #include <stdlib.h>
-#include <stdio.h>
 #include <string.h>
 
 #include "cpu.h"
@@ -18,7 +17,7 @@ int rom_parse(FILE* rom, ROM_Header* header)
 	return (read == sizeof(ROM_Header) && !memcmp("NES\x1A", header->magic, 4));
 }
 
-int main(int argc, char** argv)
+/*int main(int argc, char** argv)
 {
 	int i;
 	ROM_Header head;
@@ -32,7 +31,7 @@ int main(int argc, char** argv)
 
 	SDL_Event se;
 	SDL_Surface* screen = SDL_SetVideoMode(800, 600, 32, SDL_HWSURFACE); /* use SDL_HWSURFACE? */
-	SDL_WM_SetCaption("pNES", "pNES");
+	/*SDL_WM_SetCaption("pNES", "pNES");
 
 	if (!rom)
 	{
@@ -63,12 +62,13 @@ int main(int argc, char** argv)
 	printf("Color: %s\n", (head.flags3 & 1) ? "PAL" : "NTSC");
 
 	/* map PRG ROM into memory */
-	/* TODO: account for trainer? */
-	rBanks = (unsigned char*)malloc(16*head.rom_banks*1024*sizeof(uint8_t));
+	/* TODO: account for trainer */
+	/*rBanks = (unsigned char*)malloc(16*head.rom_banks*1024*sizeof(uint8_t));
 	fread(rBanks, 1, 16*head.rom_banks*1024*sizeof(uint8_t), rom);
 
 	vrBanks = (unsigned char*)malloc(8*head.vrom_banks*1024*sizeof(uint8_t));
 	fread(vrBanks, 1, 8*head.vrom_banks*1024*sizeof(uint8_t), rom);
+	ppu_init(&ppu, &cpu);
 	ppu.vram = vrBanks;
 
 	fclose(rom);
@@ -78,37 +78,40 @@ int main(int argc, char** argv)
 	mem.ppu = &ppu;
 
 	/* map PRG-ROM banks */
-	mem.prg1 = rBanks;
-	if (head.rom_banks == 1) /* mirror bank 1 if there is no bank 2 */
-		mem.prg2 = rBanks;
+	/*mem.prg1 = rBanks;
+	/*if (head.rom_banks == 1) /* mirror bank 1 if there is no bank 2 */
+	/*	mem.prg2 = rBanks;
 	else
 		mem.prg1 = rBanks + 0x4000;
 
-	puts("\nPress enter to start CPU emulation");
+	/*puts("\nPress enter to start CPU emulation");*/
 	/*scanf("%c",&i);*/
 
-	cpu_interrupt(&cpu, INT_RST);
+	/*cpu_interrupt(&cpu, INT_RST);
 	/*cpu_reset(&cpu);*/
 
-	SDL_Init(SDL_INIT_EVERYTHING);
-	ppu_render_pattern_table(&ppu, screen);
-/*	ppu_render_nametable(&ppu, screen); /* won't work until PPU registers are properly implemented */ /*/
+	/*SDL_Init(SDL_INIT_EVERYTHING);
+	/*ppu_render_pattern_table(&ppu, screen);*/
+	/*cpu_interrupt(&cpu, INT_NMI);*/
+	/*ppu_render_nametable(&ppu, screen);*/
+/*	ppu_render_nametable(&ppu, screen); /* won't work until PPU registers are properly implemented */
 	
-
 	/* CPU update loop */
-	for (;;)
+	/*for (;;)
 	{
 		cpu_tick(&cpu, log);
+		ppu_tick(&ppu, screen);
+
 		/* scanf("%c",&i); */
-		SDL_PollEvent(&se); /* TODO: thread this */
-		if (se.type == SDL_QUIT)
+		/*SDL_PollEvent(&se); /* TODO: thread this */
+		/*if (se.type == SDL_QUIT)
 			break;
 /*		ppu_render_pattern_table(&ppu, screen);*/
-	}
+	/*}
 
 	SDL_Quit();
 
 	fclose(log);
 	free(rBanks);
 	return 0;
-}
+}*/

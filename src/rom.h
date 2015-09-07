@@ -4,6 +4,9 @@
 #ifndef ROM_H
 #define ROM_H
 
+#include <stdint.h>
+#include <stdio.h>
+
 /* TODO: ERROR CHECKING */
 
 /* iNES header. (from http://fms.komkon.org/EMUL8/NES.html#LABM)
@@ -36,14 +39,14 @@ Byte     Contents
 /* #pragma pack(push, 1) */
 typedef struct
 {
-	char magic[4];				/* should be NES^Z */
-	unsigned char rom_banks;	/* number of 16kB ROM banks */
-	unsigned char vrom_banks;	/* number of 8kB VROM banks*/
-	unsigned char flags1;		/* flag bitfield 1 */
-	unsigned char flags2;		/* flag bitfield 2 */
-	unsigned char ram_banks;	/* number of 8kB RAM banks */
-	unsigned char flags3;		/* flag bitfield 3 (PAL/NTSC) */
-	unsigned char reserved[6];	/* should be zeros */
+	char magic[4];			/* should be NES^Z */
+	uint8_t rom_banks;		/* number of 16kB ROM banks */
+	uint8_t vrom_banks;		/* number of 8kB VROM banks*/
+	uint8_t flags1;			/* flag bitfield 1 */
+	uint8_t flags2;			/* flag bitfield 2 */
+	uint8_t ram_banks;		/* number of 8kB RAM banks */
+	uint8_t flags3;			/* flag bitfield 3 (PAL/NTSC) */
+	uint8_t reserved[6];	/* should be zeros */
 } ROM_Header;
 
 int rom_parse(FILE* rom, ROM_Header* header);
