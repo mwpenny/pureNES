@@ -72,7 +72,7 @@ static void handle_interrupt(CPU* cpu, uint8_t type)
 }
 
 #include <stdio.h>
-int cpu_tick(CPU* cpu)
+int cpu_step(CPU* cpu)
 {
 	static int occount = 0;
 	/*static FILE* log;*/
@@ -87,15 +87,18 @@ int cpu_tick(CPU* cpu)
 	if (cpu->interrupt != INT_NUL)
 		handle_interrupt(cpu, cpu->interrupt);
 
+	/*log = fopen("cpu.log", "a");*/
+
 	oci.opcode = memory_get(cpu->nes, cpu->pc++);
 	printf("%X\t%s ", cpu->pc-1, oc_names[oci.opcode]);
+	/*fprintf(log, "%X\t%s ", cpu->pc-1, oc_names[oci.opcode]);*/
 	amodes[oci.opcode](cpu, &oci);
-	/* fprintf(log, "PC:%x\tOPCODE:%s\tOPERAND:%x\tBYTES:%x\n", cpu->pc, oc_names[oci.opcode], oci.operand, oc_sizes[oci.opcode]); */
+	/*fprintf(log, "PC:%x\tOPCODE:%s\tOPERAND:%x\tBYTES:%x\n", cpu->pc, oc_names[oci.opcode], oci.operand, instruction_cycles[oci.opcode]);*/
+	/*fprintf(log, "$%.4x\t\t\t", oci.operand);*/
 	printf("$%.4x\t\t\t", oci.operand);
 	printf("A:%.2X X:%.2X Y:%.2X P:%.2X SP:%.2X\n", cpu->a, cpu->x, cpu->y, cpu->p, cpu->sp);
 
-	/*log = fopen("cpu.log", "a");
-	fprintf(log, "A:%.2X X:%.2X Y:%.2X P:%.2X SP:%.2X\n", cpu->a, cpu->x, cpu->y, cpu->p, cpu->sp);
+	/*fprintf(log, "A:%.2X X:%.2X Y:%.2X P:%.2X SP:%.2X\n", cpu->a, cpu->x, cpu->y, cpu->p, cpu->sp);
 	fclose(log);*/
 
 	cpu->cycles = instruction_cycles[oci.opcode];
@@ -104,7 +107,7 @@ int cpu_tick(CPU* cpu)
 	cpu->oddcycle = (cpu->oddcycle ^ cpu->cycles%2);
 
 	opcodes[oci.opcode](cpu, &oci);
-	return cpu->cycles;;
+	return cpu->cycles;
 }
 
 void cpu_interrupt(CPU* cpu, uint8_t type)
@@ -320,7 +323,7 @@ void cpu_PHA(CPU* cpu, OCInfo* oci)
 /* PHP - push processor status on stack */
 void cpu_PHP(CPU* cpu, OCInfo* oci)
 {
-	/* Set the BRK flag if we are handling a BRK interrupt */
+	/* BRK flag not set on hardware interrupts */
 	uint8_t flags = cpu->p;
 	if (cpu->interrupt != INT_IRQ && cpu->interrupt != INT_NMI)
 		flags |= MASK_B;
@@ -484,7 +487,7 @@ void cpu_DEX(CPU* cpu, OCInfo* oci)
 	chk_aflags(cpu, cpu->x);
 }
 
-/* DEY - recrement y register */
+/* DEY - decrement y register */
 void cpu_DEY(CPU* cpu, OCInfo* oci)
 {
 	--cpu->y;

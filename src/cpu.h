@@ -49,7 +49,7 @@ typedef struct
 
 void cpu_init(CPU* cpu, struct NES* nes);
 void cpu_reset(CPU* cpu);
-int cpu_tick(CPU* cpu);
+int cpu_step(CPU* cpu);
 void cpu_interrupt(CPU* cpu, uint8_t type);
 
 /*** Addressing mode handlers ***/

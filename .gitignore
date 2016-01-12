@@ -155,3 +155,6 @@ UpgradeLog*.htm
 FakesAssemblies/
 # Piracy is bad ;)
 *.nes
+
+Test ROMS/
+Progress pics
