@@ -17,20 +17,24 @@ void nes_load_rom(NES* nes, char* path)
 {
 	ROM_Header head;
 	FILE* rom = fopen(path, "rb");
+	uint8_t* rbanks;
 
 	rom_parse(rom, &head);
+	/* TODO: ERROR CHECKING */
 
 	/* Get and load rom bank(s) */
-	nes->prg1 = (uint8_t*)malloc(0x4000*head.rom_banks*sizeof(uint8_t));
-	fread(nes->prg1, 1, 0x4000*head.rom_banks*sizeof(uint8_t), rom);
+	rbanks = (uint8_t*)malloc(0x4000*head.rom_banks*sizeof(uint8_t));
+	fread(rbanks, 1, 0x4000*head.rom_banks*sizeof(uint8_t), rom);
+
+	nes->prg1 = rbanks;
 
 	if (head.rom_banks == 1) /* mirror bank 1 if there is no bank 2 */
-		nes->prg2 = nes->prg1;
+		nes->prg2 = rbanks;
 	else
-		nes->prg1 = nes->prg1 + 0x4000;
+		nes->prg2 = nes->prg1 + 0x4000;
 
-	nes->vram = (uint8_t*)malloc(0x2000*head.vrom_banks*sizeof(uint8_t));
-	fread(nes->vram, 1, 0x2000*head.vrom_banks*sizeof(uint8_t), rom);
+	nes->vrom = (uint8_t*)malloc(0x2000*head.vrom_banks*sizeof(uint8_t));
+	fread(nes->vrom, 1, 0x2000*head.vrom_banks*sizeof(uint8_t), rom);
 
 	fclose(rom);
 
@@ -40,7 +44,9 @@ void nes_load_rom(NES* nes, char* path)
 
 void nes_update(NES* nes, SDL_Surface* screen)
 {
-	int cycles = cpu_tick(&nes->cpu), i = 0;
+	int cycles = cpu_step(&nes->cpu), i = 0;
 	for (; i < cycles*3; ++i)
-		ppu_tick(&nes->ppu, screen);
+		ppu_step(&nes->ppu, screen);
+		/*ppu_render_pattern_table(&nes->ppu, screen);*/
+		/*ppu_render_nametable(&nes->ppu, screen);*/
 }

@@ -16,7 +16,7 @@ typedef struct NES
 	uint8_t ram[RAMSIZE];
 	uint8_t* prg1;
 	uint8_t* prg2;
-	uint8_t* vram;
+	uint8_t* vrom;
 } NES;
 
 void nes_init(NES* nes);

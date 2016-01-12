@@ -36,7 +36,7 @@ uint8_t memory_get(NES* nes, uint16_t addr)
 	if (addr < 0x2000)
 		return nes->ram[addr & 0x7FF];
 	else if (addr < 0x4000)
-		return ppu_read(&nes->ppu, addr);
+		return ppu_read(&nes->ppu, addr%8 + 0x2000);
 	/* TODO: read from other areas */
 	else if (addr > 0x7FFF && addr < 0xC000)
 		return nes->prg1[addr - 0x8000];
@@ -68,7 +68,7 @@ void memory_set(NES* nes, uint16_t addr, uint8_t val)
 	/* TODO: disallow writing into read-only memory */
 	if (addr < 0x2000)
 		nes->ram[addr & 0x7FF] = val;
-	else if (addr < 0x4000)
+	else if (addr < 0x4000 || addr == 0x4014)
 		ppu_write(&nes->ppu, addr, val);
 	/* TODO: write to other areas */
 	else if (addr > 0x7FFF && addr < 0xC000)
