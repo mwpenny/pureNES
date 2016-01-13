@@ -486,8 +486,8 @@ void ppu_step(PPU* ppu, RenderSurface screen)
 						/*s1 >>= 1;
 						s2 >>= 1;*/
 
-						s1 = (s1 & 0xFF) | (tile_bmap_low << 8);
-						s2 = (s2 & 0xFF) | (tile_bmap_hi << 8);
+						s1 = (s1 & 0xFF00) | tile_bmap_low;
+						s2 = (s2 & 0xFF00) | tile_bmap_hi;
 
 						/* Move to next tile */
 						scroll_inc_x(ppu);
@@ -529,12 +529,12 @@ void ppu_step(PPU* ppu, RenderSurface screen)
 		/* Visible pixels */
 		if (ppu->scanline < 240 && ppu->cycle > 0 && ppu->cycle < 257)
 		{
-			uint8_t pi = (s1 & 1) | ((s2 & 1) << 1);
+			uint8_t pi = ((s1 >> 15) & 1) | ((s2 >> 14) & 2);
 			uint32_t color = ppu->pram[tile_attr*4 + pi];
 
 			/*render_palettes(ppu, screen);*/
-			s1 >>= 1;
-			s2 >>= 1;
+			s1 <<= 1;
+			s2 <<= 1;
 			render_pixel(screen, ppu->cycle, ppu->scanline, palette[color]);
 			/*render_nt(ppu, screen);
 			renderer_flip_surface(screen);*/
