@@ -184,13 +184,13 @@ static void ppuscroll_write(PPU* ppu, uint8_t val)
 /* Handles writes to $2006 (PPU address register) */
 static void ppuaddr_write(PPU* ppu, uint8_t val)
 {
-	if (!ppu->w) /* first write = high bit */
+	if (!ppu->w) /* first write = high byte */
 	{
 		 /* t: .FEDCBA ........ = d: ..FEDCBA
 		    t: X...... ........ = 0 */
 		ppu->t = (ppu->t & 0xFF) | ((val & 0x3F) << 8);
 	}
-	else		 /* second write = low bit */
+	else		 /* second write = low byte */
 	{
 		/* t: ....... HGFEDCBA = d: HGFEDCBA
 		   v                   = t */
@@ -203,19 +203,20 @@ static void ppuaddr_write(PPU* ppu, uint8_t val)
 /* Handles reads from $2007 (PPU data port) */
 static uint8_t ppudata_read(PPU* ppu)
 {
-	uint8_t val = ppu_mem_read(ppu, ppu->v);
+	uint8_t val;
 
+	/* Reading with v in [0, $3EFF] returns contents of internal buffer */
 	if (ppu->v < 0x3F00)
 	{
-		/* Reading with v in [0, $3EFF] returns contents of internal buffer */
-		uint8_t tmp = ppu->data_buf;
-		ppu->data_buf = val;
-		val = tmp;
+		val = ppu->data_buf;
+		ppu->data_buf = ppu_mem_read(ppu, ppu->v);
 	}
+
+	/* If v is in palette range, the buffer is updated with the
+	   mirrored nametable data that would appear "underneath" the palette */
 	else
 	{
-		/* If v is in palette range, the buffer is updated with the
-		   mirrored nametable data that would appear "underneath" the palette */
+		val = ppu_mem_read(ppu, ppu->v);
 		ppu->data_buf = ppu_mem_read(ppu, ppu->v - 0x1000);
 	}
 
@@ -232,7 +233,6 @@ static uint8_t ppudata_read(PPU* ppu)
 /* Handles writes to $2007 (PPU data port) */
 static void ppudata_write(PPU* ppu, uint8_t val)
 {
-	uint8_t d = VADDR_INC(ppu);
 	ppu_mem_write(ppu, ppu->v, val);
 
 	/* TODO: During rendering (on the pre-render line and the visible lines 0-239,
@@ -340,6 +340,43 @@ void render_palettes(PPU* ppu, RenderSurface screen)
 	renderer_flip_surface(screen);
 }
 
+void render_nt(PPU* ppu, RenderSurface screen)
+{
+	int i = 0, row, pixel;
+	for (; i < 960; ++i)
+	{
+		uint8_t ntb = ppu_mem_read(ppu, 0x2000 + i);
+
+		for (row = 0; row < 8; ++row)
+		{
+			for (pixel = 0; pixel < 8; ++pixel)
+			{
+				uint8_t bit = 7 - pixel;
+				uint8_t mask = 1 << bit;				
+				uint8_t lb = (ppu->nes->vrom[BG_TBL(ppu) + (ntb*16)+row] & mask) >> bit;
+				uint8_t hb = (ppu->nes->vrom[BG_TBL(ppu) + (ntb*16)+row+8] & mask) >> bit;
+
+				uint8_t color = lb | (hb << 1);
+			
+				/* Donkey Kong palette 0 (for testing) */
+				switch (color)
+				{
+					case 0:
+						color = 0x0F; break;
+					case 1:
+						color = 0x15; break;
+					case 2:
+						color = 0x2C; break;
+					case 3:
+						color = 0x06; break;				
+				}
+
+				render_pixel(screen, (i%32)*8 + pixel, (i/32)*8 + row, palette[color]);
+			}
+		}
+	}
+}
+
 static uint8_t tile_get_palette(PPU* ppu)
 {
 	/* Fetch attribute byte for current tile */
@@ -377,7 +414,6 @@ static uint8_t tile_get_sliver(PPU* ppu, uint8_t tile, uint8_t hb)
 
 	   We're our own people, we can make our own data structures,
 	   with blackjack and hookers! */
-
 	uint8_t fineY = (ppu->v >> 12) & 7;
 	return ppu_mem_read(ppu, BG_TBL(ppu) + tile*16 + fineY + hb*8);
 }
@@ -486,7 +522,7 @@ void ppu_step(PPU* ppu, RenderSurface screen)
 			{
 				/* Update v with vertical data
 				   v: IHGF.ED CBA..... = t: IHGF.ED CBA..... */
-				ppu->v= (ppu->v & 0x41F) | (ppu->t & 0x7BE0);
+				ppu->v = (ppu->v & 0x41F) | (ppu->t & 0x7BE0);
 			}
 		}
 
@@ -496,8 +532,10 @@ void ppu_step(PPU* ppu, RenderSurface screen)
 			uint8_t pi = (s1 & 1) | ((s2 & 1) << 1);
 			uint32_t color = ppu->pram[tile_attr*4 + pi];
 
-			render_pixel(screen, ppu->cycle, ppu->scanline, palette[color]);
 			/*render_palettes(ppu, screen);*/
+			render_pixel(screen, ppu->cycle, ppu->scanline, palette[color]);
+			/*render_nt(ppu, screen);
+			renderer_flip_surface(screen);*/
 		}
 	}
 
