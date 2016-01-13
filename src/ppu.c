@@ -340,6 +340,88 @@ void render_palettes(PPU* ppu, RenderSurface screen)
 	renderer_flip_surface(screen);
 }
 
+static uint8_t tile_get_palette(PPU* ppu)
+{
+	/* Fetch attribute byte for current tile */
+
+	/* Attribute table addresses are of the form
+	   NN 1111 YYY XXX
+	   || |||| ||| +++-- high 3 bits of coarse X (x/4)
+	   || |||| +++------ high 3 bits of coarse Y (y/4)
+	   || ++++---------- attribute offset (960 bytes)
+	   ++--------------- nametable select */
+	uint16_t addr = 0x23C0 | (ppu->v & 0xC00) |
+					((ppu->v >> 4) & 0x38) |
+					((ppu->v >> 2) & 7);
+
+	/* Attribute table bytes control 4x4 tile regions and are of the form
+	   BR BL TR TL
+	   || || || ++--- Top left 2x2 region's palette index
+	   || || ++------ Top right 2x2 region's palette index
+	   || ++--------- Bottom left 2x2 region's palette index
+	   ++------------ Bottom right 2x2 region's palette index
+
+	   Use scroll values to isolate palette index for current tile's 2x2 tile region
+
+	   Shift right 2 every 4 X tiles (right 2x2 subregions in 4x4 tile regions).
+	   Shift right 4 every 4 Y tiles (bottom 2x2 subregions in 4x4 tile regions). */
+
+	return (ppu_mem_read(ppu, addr) >>
+			((ppu->v & 2) | ((ppu->v >> 4) & 4))) & 3;
+}
+
+static uint8_t tile_get_sliver(PPU* ppu, uint8_t tile, uint8_t hb)
+{
+	/* Fetch byte of tile bitmap row from pattern table */
+	/* TODO: get once. Don't need EXACT hb/lb sliver behavior? (probably not).
+
+	   We're our own people, we can make our own data structures,
+	   with blackjack and hookers! */
+
+	uint8_t fineY = (ppu->v >> 12) & 7;
+	return ppu_mem_read(ppu, BG_TBL(ppu) + tile*16 + fineY + hb*8);
+}
+
+static void scroll_inc_x(PPU* ppu)
+{
+	/* Increment coarse X, switching the
+	   horizontal nametable on wraparound */
+	if ((ppu->v & 0x1F) == 0x1F)
+		ppu->v ^= 0x41F;
+	else
+		++ppu->v;
+}
+
+static void scroll_inc_y(PPU* ppu)
+{
+	/* Switch vertical nametable on wraparound */
+	if ((ppu->v & 0x7000) == 0x7000)
+	{
+		uint8_t coarseY = (ppu->v >> 5) & 0x1F;
+		ppu->v &= ~0x7000; /* Clear fine Y */
+
+		/* Last row of nametable. Set coarse Y to 0 and switch NT */
+		if (coarseY == 29)
+		{
+			ppu->v &= 0x7C1F;
+			ppu->v ^= 0x0800;
+		}
+
+		/* If coarse Y is incremented from 31, it will
+			wrap to 0, but the nametable will not switch */
+		else if (coarseY == 31)
+			ppu->v &= 0x7C1F;
+
+		/* Increment coarse Y */
+		else
+			ppu->v += 0x20;
+	}
+
+	/* Increment fine Y */
+	else
+		ppu->v += 0x1000;
+}
+
 void ppu_step(PPU* ppu, RenderSurface screen)
 {
 	/* TODO: init SL to 240 */
@@ -366,87 +448,28 @@ void ppu_step(PPU* ppu, RenderSurface screen)
 						s1 = (s1 & 0xFF) | (tile_bmap_low << 8);
 						s2 = (s2 & 0xFF) | (tile_bmap_hi << 8);
 
-						/* Switch horizontal nametable on wraparound */
-						if ((ppu->v & 0x1F) == 0x1F)
-							ppu->v ^= 0x41F;
-						else
-							++ppu->v;
-
+						/* Move to next tile */
+						scroll_inc_x(ppu);
 						break;
 					case 1:		/* Fetch next tile id from current nametable */
 						nt_byte = ppu_mem_read(ppu, 0x2000 | (ppu->v & 0xFFF));
 						break;
 					case 3:		/* Fetch tile attribute */
-					{
-						 /*NN 1111 YYY XXX
-						   || |||| ||| +++-- high 3 bits of coarse X (x/4)
-						   || |||| +++------ high 3 bits of coarse Y (y/4)
-						   || ++++---------- attribute offset (960 bytes)
-						   ++--------------- nametable select */
-						uint16_t addr = 0x23C0 | (ppu->v & 0xC00) |
-								 ((ppu->v >> 4) & 0x38) |
-								 ((ppu->v >> 2) & 7);
-
-						/* Attribute table bytes are of the form
-							BR BL TR TL
-							|| || || ++--- Top left tile's palette index
-							|| || ++------ Top right tile's palette index
-							|| ++--------- Bottom left tile's palette index
-							++------------ Bottom right tile's palette index
-							
-						   Use scroll values to isolate palette index for current tile's 2x2 tile region
-
-						   Shift right by 2 every 4 horizontal tiles (right 2x2 tile subregion in 4x4 tile regions).
-						   Shift right by 4 every 4 vertical tiles (bottom 2x2 tile subregion in 4x4 tile regions). */
-						tile_attr = (ppu_mem_read(ppu, addr) >>
-									((ppu->v & 2) | ((ppu->v >> 4) & 4))) & 3;
+						tile_attr = tile_get_palette(ppu);
 						break;
-					}
 					case 5:		/* Fetch low byte of tile bitmap row from pattern table */
-					{
-						uint8_t finey = (ppu->v >> 12) & 7;
-						tile_bmap_low = ppu_mem_read(ppu, BG_TBL(ppu) + nt_byte*16 + finey);
+						tile_bmap_low = tile_get_sliver(ppu, nt_byte, 0);
 						break;
-					} 
 					case 7:		/* Fetch high byte of tile bitmap row from pattern table */
-					{
-						uint8_t finey = (ppu->v >> 12) & 7;
-						tile_bmap_hi = ppu_mem_read(ppu, BG_TBL(ppu) + nt_byte*16 + finey + 8);
+						tile_bmap_hi = tile_get_sliver(ppu, nt_byte, 1);
 						break;
-					}
 				}
 			}
 
 			if (ppu->cycle == 256)
 			{
-				/* End of rendered line. Increment fine Y */
-
-				/* Switch vertical nametable on wraparound */
-				if ((ppu->v & 0x7000) == 0x7000)
-				{
-					uint8_t coarseY = (ppu->v >> 5) & 0x1F;
-					ppu->v &= ~0x7000; /* Clear fine Y */
-
-					/* Last row of nametable. Set coarse Y to 0 and switch NT */
-					if (coarseY == 29)
-					{
-						ppu->v &= 0x7C1F;
-						ppu->v ^= 0x0800;
-					}
-
-					/* If coarse Y is incremented from 31, it will
-					   wrap to 0, but the nametable will not switch */
-					else if (coarseY == 31)
-						ppu->v &= 0x7C1F;
-
-					/* Increment coarse Y */
-					else
-						ppu->v += 0x20;
-				}
-
-				/* Increment fine Y */
-				else
-					ppu->v += 0x1000;
+				/* End of rendered line. Increment Y */
+				scroll_inc_y(ppu);
 			}
 
 			if (ppu->cycle == 257)
