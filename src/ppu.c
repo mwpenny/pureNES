@@ -483,8 +483,8 @@ void ppu_step(PPU* ppu, RenderSurface screen)
 				switch (ppu->cycle % 8) {
 					case 0: /* "idle cycle". Move data from internal latches to shift registers */
 						/* TODO: shift after updating s1 and s2?? */
-						s1 >>= 1;
-						s2 >>= 1;
+						/*s1 >>= 1;
+						s2 >>= 1;*/
 
 						s1 = (s1 & 0xFF) | (tile_bmap_low << 8);
 						s2 = (s2 & 0xFF) | (tile_bmap_hi << 8);
@@ -533,6 +533,8 @@ void ppu_step(PPU* ppu, RenderSurface screen)
 			uint32_t color = ppu->pram[tile_attr*4 + pi];
 
 			/*render_palettes(ppu, screen);*/
+			s1 >>= 1;
+			s2 >>= 1;
 			render_pixel(screen, ppu->cycle, ppu->scanline, palette[color]);
 			/*render_nt(ppu, screen);
 			renderer_flip_surface(screen);*/
