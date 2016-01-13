@@ -422,6 +422,12 @@ static void scroll_inc_y(PPU* ppu)
 		ppu->v += 0x1000;
 }
 
+#define SL_PRERENDER(ppu) (ppu->scanline == 261)
+#define SL_VISIBLE(ppu) (ppu->scanline < 240)
+#define CYC_RENDER(ppu) (ppu->cycle > 0 && ppu->cycle < 257)
+#define CYC_PREFETCH(ppu) (ppu->cycle > 320 && ppu->cycle < 337)
+#define CYC_UPDATEY(ppu) (ppu->cycle > 279 && ppu->cycle < 305)
+
 void ppu_step(PPU* ppu, RenderSurface screen)
 {
 	/* TODO: init SL to 240 */
@@ -433,11 +439,10 @@ void ppu_step(PPU* ppu, RenderSurface screen)
 
 	if (BG_ENABLED(ppu) || SPR_ENABLED(ppu))
 	{
-		if (ppu->scanline == 261 || ppu->scanline < 240)
+		if (SL_PRERENDER(ppu) || SL_VISIBLE(ppu))
 		{
 			/* memory accesses */
-			if ((ppu->cycle > 320 && ppu->cycle < 337) ||
-				(ppu->cycle > 0 && ppu->cycle < 257))
+			if (CYC_RENDER(ppu) || CYC_PREFETCH(ppu))
 			{
 				switch (ppu->cycle % 8) {
 					case 0: /* "idle cycle". Move data from internal latches to shift registers */
@@ -466,11 +471,9 @@ void ppu_step(PPU* ppu, RenderSurface screen)
 				}
 			}
 
+			/* End of rendered line. Move to the next one */
 			if (ppu->cycle == 256)
-			{
-				/* End of rendered line. Increment Y */
 				scroll_inc_y(ppu);
-			}
 
 			if (ppu->cycle == 257)
 			{
@@ -479,7 +482,7 @@ void ppu_step(PPU* ppu, RenderSurface screen)
 				ppu->v = (ppu->v & 0x7BE0) | (ppu->t & 0x41F);
 			}
 
-			if (ppu->scanline == 261 && ppu->cycle > 279 && ppu->cycle < 305)
+			if (ppu->scanline == 261 && CYC_UPDATEY(ppu))
 			{
 				/* Update v with vertical data
 				   v: IHGF.ED CBA..... = t: IHGF.ED CBA..... */
@@ -491,27 +494,9 @@ void ppu_step(PPU* ppu, RenderSurface screen)
 		if (ppu->scanline < 240 && ppu->cycle > 0 && ppu->cycle < 257)
 		{
 			uint8_t pi = (s1 & 1) | ((s2 & 1) << 1);
-			uint32_t color;
+			uint32_t color = ppu->pram[tile_attr*4 + pi];
 
-			/* Donkey Kong palette (for testing) */
-			switch (pi)
-			{
-				case 0:
-					color = 0x0F;
-					break;
-				case 1:
-					color = 0x15;
-					break;
-				case 2:
-					color = 0x2C;
-					break;
-				case 3:
-					color = 0x06;
-					break;
-			}
-
-			/* sprites = 0x10 */
-			render_pixel(screen, ppu->cycle, ppu->scanline, palette[ppu->pram[0x00 | (tile_attr << 2) | pi]]);
+			render_pixel(screen, ppu->cycle, ppu->scanline, palette[color]);
 			/*render_palettes(ppu, screen);*/
 		}
 	}
