@@ -4,6 +4,7 @@
 #include "memory.h"
 #include "renderer.h"
 #include "ppu.h"
+#include "game.h"
 
 /* TODO: XOR vs AND/OR */
 
@@ -49,8 +50,14 @@ static uint8_t ppu_mem_read(PPU* ppu, uint16_t addr)
 	/* Namtables ($2000-$2FFF; $3F00-$3F1F mirror $2000-$2EFF) */
 	else if (addr < 0x3F00)
 	{
-		/* TODO: not enough VRAM for all 4 nametables. Mirroring */
-		return ppu->vram[(addr-0x2000)%0x1000];
+		/* Handle nametable mirroring */
+		if (GAME_VERT_MIRRORING((&ppu->nes->game)))
+			return ppu->vram[addr & 0x7FF];
+		else
+		{
+			uint8_t row = (addr >> 11) & 1;
+			return ppu->vram[addr & 0x3FF | (row << 10)];
+		}
 	}
 	/* Palettes ($3F00-$3F1F; mirrored at $3F20-$3FFF) */
 	else if (addr < 0x4000)
@@ -73,8 +80,14 @@ static void ppu_mem_write(PPU* ppu, uint16_t addr, uint8_t val)
 	/* Namtables ($2000-$2FFF; $3F00-$3F1F mirror $2000-$2EFF) */
 	else if (addr < 0x3F00)
 	{
-		/* TODO: not enough VRAM for all 4 nametables. Mirroring */
-		ppu->vram[(addr-0x2000)%0x1000] = val;
+		/* Handle nametable mirroring */
+		if (GAME_VERT_MIRRORING((&ppu->nes->game)))
+			ppu->vram[addr & 0x7FF] = val;
+		else
+		{
+			uint8_t row = (addr >> 11) & 1;
+			ppu->vram[addr & 0x3FF | (row << 10)] = val;
+		}
 	}
 	/* Palettes ($3F00-$3F1F; mirrored at $3F20-$3FFF) */
 	else if (addr < 0x4000)
