@@ -50,7 +50,7 @@ static uint8_t ppu_mem_read(PPU* ppu, uint16_t addr)
 	else if (addr < 0x3F00)
 	{
 		/* TODO: not enough VRAM for all 4 nametables. Mirroring */
-		return ppu->vram[(addr-0x2000)%1000];
+		return ppu->vram[(addr-0x2000)%0x1000];
 	}
 	/* Palettes ($3F00-$3F1F; mirrored at $3F20-$3FFF) */
 	else if (addr < 0x4000)
@@ -74,7 +74,7 @@ static void ppu_mem_write(PPU* ppu, uint16_t addr, uint8_t val)
 	else if (addr < 0x3F00)
 	{
 		/* TODO: not enough VRAM for all 4 nametables. Mirroring */
-		ppu->vram[(addr-0x2000)%1000] = val;
+		ppu->vram[(addr-0x2000)%0x1000] = val;
 	}
 	/* Palettes ($3F00-$3F1F; mirrored at $3F20-$3FFF) */
 	else if (addr < 0x4000)
@@ -482,10 +482,6 @@ void ppu_step(PPU* ppu, RenderSurface screen)
 			{
 				switch (ppu->cycle % 8) {
 					case 0: /* "idle cycle". Move data from internal latches to shift registers */
-						/* TODO: shift after updating s1 and s2?? */
-						/*s1 >>= 1;
-						s2 >>= 1;*/
-
 						s1 = (s1 & 0xFF00) | tile_bmap_low;
 						s2 = (s2 & 0xFF00) | tile_bmap_hi;
 
