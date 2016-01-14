@@ -1,5 +1,6 @@
 #include "memory.h"
 #include "ppu.h"
+#include "controller.h"
 
 /* CPU memory map (from https://en.wikibooks.org/wiki/NES_Programming/Memory_Map)
 
@@ -37,6 +38,9 @@ uint8_t memory_get(NES* nes, uint16_t addr)
 		return nes->ram[addr & 0x7FF];
 	else if (addr < 0x4000)
 		return ppu_read(&nes->ppu, addr%8 + 0x2000);
+	/* TODO: finish this / support multiple controllers and/or peripherals */
+	else if (addr == 0x4016)
+		return controller_read_output(&nes->c1);
 	/* TODO: read from other areas */
 	else if (addr > 0x7FFF && addr < 0xC000)
 		return nes->prg1[addr - 0x8000];
@@ -70,6 +74,8 @@ void memory_set(NES* nes, uint16_t addr, uint8_t val)
 		nes->ram[addr & 0x7FF] = val;
 	else if (addr < 0x4000 || addr == 0x4014)
 		ppu_write(&nes->ppu, addr, val);
+	else if (addr == 0x4016)
+		controllers_write_input(val);
 	/* TODO: write to other areas */
 	else if (addr > 0x7FFF && addr < 0xC000)
 		nes->prg1[addr - 0x8000] = val;

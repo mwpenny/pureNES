@@ -4,6 +4,9 @@
 #include "nes.h"
 #include "rom.h"
 
+#include "controller.h"
+#include "controllers/keyboard.h"
+
 void nes_init(NES* nes)
 {
 	/* Initialize the system */
@@ -11,6 +14,7 @@ void nes_init(NES* nes)
 	memset(nes->ram, 0, RAMSIZE);
 	cpu_init(&nes->cpu, nes);
 	ppu_init(&nes->ppu, nes);
+	controller_kb_init(&nes->c1);
 }
 
 void nes_load_rom(NES* nes, char* path)
@@ -49,4 +53,7 @@ void nes_update(NES* nes, SDL_Surface* screen)
 		ppu_step(&nes->ppu, screen);
 		/*ppu_render_pattern_table(&nes->ppu, screen);*/
 		/*ppu_render_nametable(&nes->ppu, screen);*/
+
+	/* TODO: move this out of emulator (make emu a DLL and update controllers in front-end?) */
+	controller_update(&nes->c1);
 }
