@@ -43,9 +43,9 @@ uint8_t memory_get(NES* nes, uint16_t addr)
 		return controller_read_output(&nes->c1);
 	/* TODO: read from other areas */
 	else if (addr > 0x7FFF && addr < 0xC000)
-		return nes->prg1[addr - 0x8000];
+		return nes->game.prg1[addr - 0x8000];
 	else if (addr > 0xBFFF && addr < 0x10000)
-		return nes->prg2[addr - 0xC000];
+		return nes->game.prg2[addr - 0xC000];
 	else
 		return 0;
 }
@@ -78,7 +78,7 @@ void memory_set(NES* nes, uint16_t addr, uint8_t val)
 		controllers_write_input(val);
 	/* TODO: write to other areas */
 	else if (addr > 0x7FFF && addr < 0xC000)
-		nes->prg1[addr - 0x8000] = val;
+		nes->game.prg1[addr - 0x8000] = val;
 	else if (addr > 0xBFFF && addr < 0x10000)
-		nes->prg2[addr - 0xC000] = val;
+		nes->game.prg2[addr - 0xC000] = val;
 }

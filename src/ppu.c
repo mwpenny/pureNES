@@ -45,7 +45,7 @@ static uint8_t ppu_mem_read(PPU* ppu, uint16_t addr)
 {
 	/* Pattern tables ($0000-$1FFF) */
 	if (addr < 0x2000)
-		return ppu->nes->vrom[addr];
+		return ppu->nes->game.vrom[addr];
 	/* Namtables ($2000-$2FFF; $3F00-$3F1F mirror $2000-$2EFF) */
 	else if (addr < 0x3F00)
 	{
@@ -69,7 +69,7 @@ static void ppu_mem_write(PPU* ppu, uint16_t addr, uint8_t val)
 {
 	/* Pattern tables ($0000-$1FFF) */
 	if (addr < 0x2000)
-		ppu->nes->vrom[addr] = val;
+		ppu->nes->game.vrom[addr] = val;
 	/* Namtables ($2000-$2FFF; $3F00-$3F1F mirror $2000-$2EFF) */
 	else if (addr < 0x3F00)
 	{
@@ -353,8 +353,8 @@ void render_nt(PPU* ppu, RenderSurface screen)
 			{
 				uint8_t bit = 7 - pixel;
 				uint8_t mask = 1 << bit;				
-				uint8_t lb = (ppu->nes->vrom[BG_TBL(ppu) + (ntb*16)+row] & mask) >> bit;
-				uint8_t hb = (ppu->nes->vrom[BG_TBL(ppu) + (ntb*16)+row+8] & mask) >> bit;
+				uint8_t lb = (ppu->nes->game.vrom[BG_TBL(ppu) + (ntb*16)+row] & mask) >> bit;
+				uint8_t hb = (ppu->nes->game.vrom[BG_TBL(ppu) + (ntb*16)+row+8] & mask) >> bit;
 
 				uint8_t color = lb | (hb << 1);
 			

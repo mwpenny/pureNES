@@ -6,6 +6,8 @@
 #include "cpu.h"
 #include "ppu.h"
 #include "controller.h"
+#include "game.h"
+
 #include <SDL.h>
 
 #define RAMSIZE 0x800
@@ -15,10 +17,8 @@ typedef struct NES
 	CPU cpu;
 	PPU ppu;
 	Controller c1; /* TODO: multiple controllers / peripherals */
-	uint8_t ram[RAMSIZE];
-	uint8_t* prg1;
-	uint8_t* prg2;
-	uint8_t* vrom;
+	uint8_t ram[RAMSIZE];	
+	Game game;
 } NES;
 
 void nes_init(NES* nes);
