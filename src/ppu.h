@@ -70,6 +70,9 @@ typedef struct {
 	uint16_t scanline;
 	uint16_t cycle;
 
+	uint8_t bg_attr;
+	uint16_t bg_bmp1, bg_bmp2;
+
 } PPU;
 
 void ppu_init(PPU* ppu, struct NES* nes);

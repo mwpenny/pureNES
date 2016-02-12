@@ -515,246 +515,104 @@ static void scroll_inc_y(PPU* ppu)
 		ppu->v += 0x1000;
 }
 
-#define SL_PRERENDER(ppu) (ppu->scanline == 261)
-#define SL_VISIBLE(ppu) (ppu->scanline < 240)
-#define CYC_RENDER(ppu) (ppu->cycle > 0 && ppu->cycle < 257)
-#define CYC_PREFETCH(ppu) (ppu->cycle > 320 && ppu->cycle < 337)
-#define CYC_UPDATEY(ppu) (ppu->cycle > 279 && ppu->cycle < 305)
+void fetch_next_bgtile(PPU* ppu)
+{
+	static uint8_t nt_byte = 0;
+	static uint32_t tile_bmap_low = 0, tile_bmap_hi = 0;
+
+	switch (ppu->cycle % 8)
+	{
+		case 1:		/* Fetch tile id from current nametable */
+			nt_byte = ppu_mem_read(ppu, 0x2000 | (ppu->v & 0xFFF));
+			break;
+		case 3:		/* Fetch tile attribute */
+			ppu->bg_attr = tile_get_palette(ppu);
+			break;
+		case 5:		/* Fetch low byte of tile bitmap row from pattern table */
+			tile_bmap_low = bg_tile_get_sliver(ppu, nt_byte, 0);
+			break;
+		case 7:		/* Fetch high byte of tile bitmap row from pattern table */
+			tile_bmap_hi = bg_tile_get_sliver(ppu, nt_byte, 1);
+			break;
+		case 0:		/* Move data from internal latches to shift registers */
+			ppu->bg_bmp1 = (ppu->bg_bmp1 & 0xFF00) | tile_bmap_low;
+			ppu->bg_bmp2 = (ppu->bg_bmp2 & 0xFF00) | tile_bmap_hi;
+
+			/* Move to next tile */
+			scroll_inc_x(ppu);
+			break;
+	}
+}
+
+void draw(PPU* ppu, RenderSurface screen)
+{
+	uint8_t pi = ((ppu->bg_bmp1 >> 15) & 1) | ((ppu->bg_bmp2 >> 14) & 2);
+	uint32_t color = ppu->pram[ppu->bg_attr*4 + pi];
+
+	ppu->bg_bmp1 <<= 1;
+	ppu->bg_bmp2 <<= 1;
+
+	render_pixel(screen, ppu->cycle, ppu->scanline, palette[color]);
+}
+
+#define SL_RENDER(sl) (sl < 240)
+#define SL_PRERENDER(sl) (sl == 261)
+#define CYC_RENDER(cc) (cc > 0 && cc < 257)
+#define CYC_PREFETCH(cc) (cc > 320 && cc < 337)
 
 void ppu_step(PPU* ppu, RenderSurface screen)
 {
 	/* TODO: ***read*** / write on correct cycles */
 	/* TODO: init SL to 240 */
-
-	static uint8_t nt_byte = 0;
-	static uint8_t tile_attr = 0;
-	static uint16_t tile_bmap_low = 0, tile_bmap_hi = 0;
-	static uint16_t s1 = 0, s2 = 0;
-
-	static uint8_t sprites[32] = {0}; /* Secondary OAM */
-	static uint8_t spr_bmp1[8] = {0};
-	static uint8_t spr_bmp2[8] = {0};
-	static uint8_t spr_attr[8] = {0};
-	static uint8_t spr_x[8] = {0};
-
-	static uint8_t sprites_i;
+	/* TODO: sprite eval. */
 
 	if (BG_ENABLED(ppu) || SPR_ENABLED(ppu))
 	{
-		if (SL_PRERENDER(ppu) || SL_VISIBLE(ppu))
+		/*** Render lines ***/
+		if (SL_RENDER(ppu->scanline) || SL_PRERENDER(ppu->scanline))
 		{
-			if (ppu->cycle == 0) sprites_i = 0;
-			else if (ppu->cycle < 65 && ppu->cycle % 2 != 0) sprites[sprites_i++] = 0xFF;
+			/* TODO: "garbage" NT fetches used by MMC5 */
+			if (CYC_RENDER(ppu->cycle) || CYC_PREFETCH(ppu->cycle))
+				fetch_next_bgtile(ppu);
 
-			/* memory accesses */
-			if (CYC_RENDER(ppu) || CYC_PREFETCH(ppu))
-			{
-				switch (ppu->cycle % 8) {
-					case 0: /* "idle cycle". Move data from internal latches to shift registers */
-						s1 = (s1 & 0xFF00) | tile_bmap_low;
-						s2 = (s2 & 0xFF00) | tile_bmap_hi;
-
-						/* Move to next tile */
-						scroll_inc_x(ppu);
-						break;
-					case 1:		/* Fetch next tile id from current nametable */
-						nt_byte = ppu_mem_read(ppu, 0x2000 | (ppu->v & 0xFFF));
-						break;
-					case 3:		/* Fetch tile attribute */
-						tile_attr = tile_get_palette(ppu);
-						break;
-					case 5:		/* Fetch low byte of tile bitmap row from pattern table */
-						tile_bmap_low = bg_tile_get_sliver(ppu, nt_byte, 0);
-						break;
-					case 7:		/* Fetch high byte of tile bitmap row from pattern table */
-						tile_bmap_hi = bg_tile_get_sliver(ppu, nt_byte, 1);
-						break;
-				}
-			}
-
-			/* End of rendered line. Move to the next one */
+			/* End of line */
 			if (ppu->cycle == 256)
 				scroll_inc_y(ppu);
-
-			if (ppu->cycle == 257)
+			else if (ppu->cycle == 257)
 			{
 				/* Update v with horizontal data
-				   v: ....F.. ...EDCBA = t: ....F.. ...EDCBA */
+					v: ....F.. ...EDCBA = t: ....F.. ...EDCBA */
 				ppu->v = (ppu->v & 0x7BE0) | (ppu->t & 0x41F);
 			}
-
-			if (ppu->scanline == 261 && CYC_UPDATEY(ppu))
-			{
-				/* Update v with vertical data
-				   v: IHGF.ED CBA..... = t: IHGF.ED CBA..... */
-				ppu->v = (ppu->v & 0x41F) | (ppu->t & 0x7BE0);
-			}
-
-			/* Sprite evaluation */
-			/* TODO: use internal address bus (i.e., OAMADDR/OAMDATA) */
-			/* TODO: 8x16 tiles */
-			if (ppu->cycle > 64 && ppu->cycle < 257)
-			{
-				static uint8_t val;
-
-				/* TODO: cycle accurate */
-				static uint8_t n;
-				static uint8_t m;
-				if (ppu->cycle == 65)
-				{
-					n = 0;
-					sprites_i = 0;
-				}
-
-				if (ppu->cycle & 1)
-				{
-					/*val = oamdata_read(ppu);*/
-				}
-				else if (n < 256)
-				{
-					/* "if (sprites found == 8) disable writes to secondary oam" */
-					if (sprites_i < 36 && ppu->oam[n] < ppu->scanline+2 && ppu->oam[n]+8 > ppu->scanline)
-					{
-						memcpy(sprites+sprites_i, ppu->oam+n, 4);
-						sprites_i += 4;
-						m = 0;
-					}
-
-					n += 4;
-
-					/* TODO: don't count on overflow. Check properly. */
-					/*if (n != 0)
-					{
-						if (ppu->oam[n+m] < ppu->scanline+2 && ppu->oam[n+m]+8 > ppu->scanline)
-						{
-							ppu->spr_overflow = 1;
-							m = (m+1) % 4;
-							if (m == 0)
-								++n;
-						}
-						else
-						{
-							++m;		/* Sprite overflow bug */
-						/*	++n;
-						}
-					}*/
-				}
-
-				/* Attempt (and fail) to copy OAM[n][0] into the next free slot in secondary OAM, and increment n (repeat until HBLANK is reached) */
-			}
-
-			/* "Secondary OAM clear and sprite evaluation do not occur on the pre-render line. Sprite tile fetches still do" */
-			if (ppu->cycle > 256 && ppu->cycle < 321)
-			{
-				/*ppu->oam_addr = 0;*/
-				static uint8_t ccount;
-				uint8_t spr_i = (ppu->cycle - 256)/8;
-
-				if (ppu->cycle == 257) ccount = 0;
-
-				/* "This happens during the second garbage nametable fetch,
-				   with the attribute byte loaded during the first tick and
-				   the X coordinate during the second" */
-
-				if (ccount == 3)
-				{
-					spr_attr[spr_i] = sprites[(spr_i*4)+2];
-					spr_x[spr_i] = sprites[(spr_i*4)+3];
-				}
-
-				if (ccount == 7)
-				{
-					uint16_t y = ppu->scanline - sprites[spr_i*4] + 1;
-
-					spr_bmp1[spr_i] = ppu_mem_read(ppu, SPR_TBL(ppu) + sprites[(spr_i*4)+1]*16 + y);
-					spr_bmp2[spr_i] = ppu_mem_read(ppu, SPR_TBL(ppu) + sprites[(spr_i*4)+1]*16 + y + 8);
-					ccount = 0;
-				}
-
-				++ccount;
-			}
 		}
 
-		/* Visible pixels */
-		if (ppu->scanline < 240 && ppu->cycle > 0 && ppu->cycle < 257)
+		if (SL_PRERENDER(ppu->scanline) && ppu->cycle > 279 && ppu->cycle < 305)
 		{
-			uint8_t pi = ((s1 >> 15) & 1) | ((s2 >> 14) & 2);
-			uint32_t color = ppu->pram[tile_attr*4 + pi];
-			uint8_t i = 0;
-			uint8_t spr_pi = 0;
-			uint8_t mplex_i = 0;
-
-			/*render_palettes(ppu, screen);*/
-			s1 <<= 1;
-			s2 <<= 1;
-
-			for (; i < sizeof(spr_x); ++i)
-			{
-				if (spr_x[i] == 0)
-				{
-					spr_bmp1[i] <<= 1;
-					spr_bmp2[i] <<= 1;
-
-					/* First non-transparent pixel moves on to multiplexer */
-					if (spr_pi == 0)
-					{
-						spr_pi = ((spr_bmp1[i] >> 7) & 1) | ((spr_bmp2[i] >> 6) & 2);
-						mplex_i = i;
-					}
-				}
-				else
-					--spr_x[i];
-			}
-
-			/* TODO: "true" sprite0 check */
-			if (sprites[mplex_i] == ppu->oam[0] && spr_pi != 0 && pi != 0)
-			{
-				ppu->szero_hit = 1;
-			}
-
-			render_pixel(screen, ppu->cycle, ppu->scanline, palette[color]);
-			if (spr_pi != 0)
-			{
-				uint32_t color = ppu->pram[16 + ((spr_attr[mplex_i]&3)*4) + spr_pi];
-				render_pixel(screen, ppu->cycle, ppu->scanline, palette[color]);
-			}
-
-			/*if ((spr_attr[mplex_i] & 32) || pi == 0)
-			{
-				uint32_t color = ppu->pram[16 + ((spr_attr[mplex_i]&3)*4) + spr_pi];
-				render_pixel(screen, ppu->cycle, ppu->scanline, palette[color]);
-			}
-			else
-				render_pixel(screen, ppu->cycle, ppu->scanline, palette[color]);*/
-
-			/*color = ppu->pram[16 + ((spr_attr[i]&3)*4) + pi];*/
-			/*render_pixel(screen, ppu->cycle, ppu->scanline, palette[color]);*/
-			/*render_nt(ppu, screen);
-			render_oam(ppu, screen);
-			renderer_flip_surface(screen);*/
+			/* Update v with vertical data
+			v: IHGF.ED CBA..... = t: IHGF.ED CBA..... */
+			ppu->v = (ppu->v & 0x41F) | (ppu->t & 0x7BE0);
 		}
+
+		if (SL_RENDER(ppu->scanline) && CYC_RENDER(ppu->cycle))
+			draw(ppu, screen);
 	}
 
-	if (ppu->cycle == 1)
+	/* VBLANK start */
+	if (ppu->scanline == 241 && ppu->cycle == 1)
 	{
-		/* VBLANK start */
-		if (ppu->scanline == 241)
-		{
-			renderer_flip_surface(screen);
-			ppu->vblank_started = 1;
-			if (NMI_ENABLED(ppu))
-				cpu_interrupt(&ppu->nes->cpu, INT_NMI);
-		}
+		renderer_flip_surface(screen);
+		ppu->vblank_started = 1;
+		if (NMI_ENABLED(ppu))
+			cpu_interrupt(&ppu->nes->cpu, INT_NMI);
+	}
 
-		/* TODO: line 261 really cycle -1 ? 
-				 differs in length depending on even/odd sl */
-		/* Pre-render scanline */
-		else if (ppu->scanline == 261)
-		{
-			ppu->vblank_started = 0;
-			ppu->szero_hit = 0;
-			ppu->spr_overflow = 0;
-		}
+	/* Pre-render line (end of VBlank) */
+	/* TODO: different length depending on even/odd */
+	if (SL_PRERENDER(ppu->scanline) && ppu->cycle == 1)
+	{
+		ppu->vblank_started = 0;
+		ppu->szero_hit = 0;
+		ppu->spr_overflow = 0;
 	}
 
 	/* Scanline is over */
