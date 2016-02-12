@@ -50,6 +50,12 @@ static uint8_t ppu_mem_read(PPU* ppu, uint16_t addr)
 	/* Namtables ($2000-$2FFF; $3F00-$3F1F mirror $2000-$2EFF) */
 	else if (addr < 0x3F00)
 	{
+		/* TODO: less branching? */
+		/*uint8_t vm = GAME_VERT_MIRRORING((&ppu->nes->game));
+		uint8_t row = (addr >> 11) & 1;
+
+		return ppu->vram[(addr & (0x3FF | (vm<<10))) + row*0x400*!vm];*/
+
 		/* Handle nametable mirroring */
 		if (GAME_VERT_MIRRORING((&ppu->nes->game)))
 			return ppu->vram[addr & 0x7FF];
@@ -147,6 +153,8 @@ static uint8_t oamdata_read(PPU* ppu)
 	/* TODO: Reading OAMDATA while the PPU is rendering will
 	   expose internal OAM accesses during sprite evaluation
 	   and loading; Micro Machines does this. */
+
+	/* TODO: and byte 2 with 0xE3 to set unused bits to 0 */
 	return ppu->oam[ppu->oam_addr];
 }
 
@@ -169,6 +177,7 @@ static void oamdata_write(PPU* ppu, uint8_t val)
 	   As such, you must upload anything to OAM that you intend to within
 	   the first 20 scanlines after the 2C07 signals vertical blanking. */
 
+	/* TODO: and byte 2 with 0xE3 to set unused bits to 0 */
 	ppu->oam[ppu->oam_addr++] = val;
 }
 
@@ -390,6 +399,41 @@ void render_nt(PPU* ppu, RenderSurface screen)
 	}
 }
 
+void render_oam(PPU* ppu, RenderSurface screen)
+{
+	int i = 0, row, pixel;
+	for (; i < 64; ++i)
+	{
+		for (row = 0; row < 8; ++row)
+		{
+			for (pixel = 0; pixel < 8; ++pixel)
+			{
+				uint8_t bit = 7 - pixel;
+				uint8_t mask = 1 << bit;				
+				uint8_t lb = (ppu->nes->game.vrom[SPR_TBL(ppu) + (ppu->oam[(i*4)+1]*16)+row] & mask) >> bit;
+				uint8_t hb = (ppu->nes->game.vrom[SPR_TBL(ppu) + (ppu->oam[(i*4)+1]*16)+row+8] & mask) >> bit;
+
+				uint8_t color = lb | (hb << 1);
+			
+				/* Donkey Kong palette 0 (for testing) */
+				switch (color)
+				{
+					case 0:
+						color = 0x0F; break;
+					case 1:
+						color = 0x15; break;
+					case 2:
+						color = 0x2C; break;
+					case 3:
+						color = 0x06; break;				
+				}
+
+				render_pixel(screen, (i%32)*8 + pixel, (i/32)*8 + row, palette[color]);
+			}
+		}
+	}
+}
+
 static uint8_t tile_get_palette(PPU* ppu)
 {
 	/* Fetch attribute byte for current tile */
@@ -420,7 +464,7 @@ static uint8_t tile_get_palette(PPU* ppu)
 			((ppu->v & 2) | ((ppu->v >> 4) & 4))) & 3;
 }
 
-static uint8_t tile_get_sliver(PPU* ppu, uint8_t tile, uint8_t hb)
+static uint8_t bg_tile_get_sliver(PPU* ppu, uint8_t tile, uint8_t hb)
 {
 	/* Fetch byte of tile bitmap row from pattern table */
 	/* TODO: get once. Don't need EXACT hb/lb sliver behavior? (probably not).
@@ -479,6 +523,7 @@ static void scroll_inc_y(PPU* ppu)
 
 void ppu_step(PPU* ppu, RenderSurface screen)
 {
+	/* TODO: ***read*** / write on correct cycles */
 	/* TODO: init SL to 240 */
 
 	static uint8_t nt_byte = 0;
@@ -486,10 +531,21 @@ void ppu_step(PPU* ppu, RenderSurface screen)
 	static uint16_t tile_bmap_low = 0, tile_bmap_hi = 0;
 	static uint16_t s1 = 0, s2 = 0;
 
+	static uint8_t sprites[32] = {0}; /* Secondary OAM */
+	static uint8_t spr_bmp1[8] = {0};
+	static uint8_t spr_bmp2[8] = {0};
+	static uint8_t spr_attr[8] = {0};
+	static uint8_t spr_x[8] = {0};
+
+	static uint8_t sprites_i;
+
 	if (BG_ENABLED(ppu) || SPR_ENABLED(ppu))
 	{
 		if (SL_PRERENDER(ppu) || SL_VISIBLE(ppu))
 		{
+			if (ppu->cycle == 0) sprites_i = 0;
+			else if (ppu->cycle < 65 && ppu->cycle % 2 != 0) sprites[sprites_i++] = 0xFF;
+
 			/* memory accesses */
 			if (CYC_RENDER(ppu) || CYC_PREFETCH(ppu))
 			{
@@ -508,10 +564,10 @@ void ppu_step(PPU* ppu, RenderSurface screen)
 						tile_attr = tile_get_palette(ppu);
 						break;
 					case 5:		/* Fetch low byte of tile bitmap row from pattern table */
-						tile_bmap_low = tile_get_sliver(ppu, nt_byte, 0);
+						tile_bmap_low = bg_tile_get_sliver(ppu, nt_byte, 0);
 						break;
 					case 7:		/* Fetch high byte of tile bitmap row from pattern table */
-						tile_bmap_hi = tile_get_sliver(ppu, nt_byte, 1);
+						tile_bmap_hi = bg_tile_get_sliver(ppu, nt_byte, 1);
 						break;
 				}
 			}
@@ -533,6 +589,90 @@ void ppu_step(PPU* ppu, RenderSurface screen)
 				   v: IHGF.ED CBA..... = t: IHGF.ED CBA..... */
 				ppu->v = (ppu->v & 0x41F) | (ppu->t & 0x7BE0);
 			}
+
+			/* Sprite evaluation */
+			/* TODO: use internal address bus (i.e., OAMADDR/OAMDATA) */
+			/* TODO: 8x16 tiles */
+			if (ppu->cycle > 64 && ppu->cycle < 257)
+			{
+				static uint8_t val;
+
+				/* TODO: cycle accurate */
+				static uint8_t n;
+				static uint8_t m;
+				if (ppu->cycle == 65)
+				{
+					n = 0;
+					sprites_i = 0;
+				}
+
+				if (ppu->cycle & 1)
+				{
+					/*val = oamdata_read(ppu);*/
+				}
+				else if (n < 256)
+				{
+					/* "if (sprites found == 8) disable writes to secondary oam" */
+					if (sprites_i < 36 && ppu->oam[n] < ppu->scanline+2 && ppu->oam[n]+8 > ppu->scanline)
+					{
+						memcpy(sprites+sprites_i, ppu->oam+n, 4);
+						sprites_i += 4;
+						m = 0;
+					}
+
+					n += 4;
+
+					/* TODO: don't count on overflow. Check properly. */
+					/*if (n != 0)
+					{
+						if (ppu->oam[n+m] < ppu->scanline+2 && ppu->oam[n+m]+8 > ppu->scanline)
+						{
+							ppu->spr_overflow = 1;
+							m = (m+1) % 4;
+							if (m == 0)
+								++n;
+						}
+						else
+						{
+							++m;		/* Sprite overflow bug */
+						/*	++n;
+						}
+					}*/
+				}
+
+				/* Attempt (and fail) to copy OAM[n][0] into the next free slot in secondary OAM, and increment n (repeat until HBLANK is reached) */
+			}
+
+			/* "Secondary OAM clear and sprite evaluation do not occur on the pre-render line. Sprite tile fetches still do" */
+			if (ppu->cycle > 256 && ppu->cycle < 321)
+			{
+				/*ppu->oam_addr = 0;*/
+				static uint8_t ccount;
+				uint8_t spr_i = (ppu->cycle - 256)/8;
+
+				if (ppu->cycle == 257) ccount = 0;
+
+				/* "This happens during the second garbage nametable fetch,
+				   with the attribute byte loaded during the first tick and
+				   the X coordinate during the second" */
+
+				if (ccount == 3)
+				{
+					spr_attr[spr_i] = sprites[(spr_i*4)+2];
+					spr_x[spr_i] = sprites[(spr_i*4)+3];
+				}
+
+				if (ccount == 7)
+				{
+					uint16_t y = ppu->scanline - sprites[spr_i*4] + 1;
+
+					spr_bmp1[spr_i] = ppu_mem_read(ppu, SPR_TBL(ppu) + sprites[(spr_i*4)+1]*16 + y);
+					spr_bmp2[spr_i] = ppu_mem_read(ppu, SPR_TBL(ppu) + sprites[(spr_i*4)+1]*16 + y + 8);
+					ccount = 0;
+				}
+
+				++ccount;
+			}
 		}
 
 		/* Visible pixels */
@@ -540,12 +680,57 @@ void ppu_step(PPU* ppu, RenderSurface screen)
 		{
 			uint8_t pi = ((s1 >> 15) & 1) | ((s2 >> 14) & 2);
 			uint32_t color = ppu->pram[tile_attr*4 + pi];
+			uint8_t i = 0;
+			uint8_t spr_pi = 0;
+			uint8_t mplex_i = 0;
 
 			/*render_palettes(ppu, screen);*/
 			s1 <<= 1;
 			s2 <<= 1;
+
+			for (; i < sizeof(spr_x); ++i)
+			{
+				if (spr_x[i] == 0)
+				{
+					spr_bmp1[i] <<= 1;
+					spr_bmp2[i] <<= 1;
+
+					/* First non-transparent pixel moves on to multiplexer */
+					if (spr_pi == 0)
+					{
+						spr_pi = ((spr_bmp1[i] >> 7) & 1) | ((spr_bmp2[i] >> 6) & 2);
+						mplex_i = i;
+					}
+				}
+				else
+					--spr_x[i];
+			}
+
+			/* TODO: "true" sprite0 check */
+			if (sprites[mplex_i] == ppu->oam[0] && spr_pi != 0 && pi != 0)
+			{
+				ppu->szero_hit = 1;
+			}
+
 			render_pixel(screen, ppu->cycle, ppu->scanline, palette[color]);
+			if (spr_pi != 0)
+			{
+				uint32_t color = ppu->pram[16 + ((spr_attr[mplex_i]&3)*4) + spr_pi];
+				render_pixel(screen, ppu->cycle, ppu->scanline, palette[color]);
+			}
+
+			/*if ((spr_attr[mplex_i] & 32) || pi == 0)
+			{
+				uint32_t color = ppu->pram[16 + ((spr_attr[mplex_i]&3)*4) + spr_pi];
+				render_pixel(screen, ppu->cycle, ppu->scanline, palette[color]);
+			}
+			else
+				render_pixel(screen, ppu->cycle, ppu->scanline, palette[color]);*/
+
+			/*color = ppu->pram[16 + ((spr_attr[i]&3)*4) + pi];*/
+			/*render_pixel(screen, ppu->cycle, ppu->scanline, palette[color]);*/
 			/*render_nt(ppu, screen);
+			render_oam(ppu, screen);
 			renderer_flip_surface(screen);*/
 		}
 	}
