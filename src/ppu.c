@@ -626,6 +626,19 @@ void find_sprites(PPU* ppu)
 	}
 }
 
+uint8_t reverse_bits(uint8_t x)
+{
+	/* TODO: more efficient way to do this? */
+	return ((x >> 7) & 1) | 
+		   ((x >> 5) & 2) |
+		   ((x >> 3) & 4) |
+		   ((x >> 1) & 8) |
+		   ((x << 1) & 16) |
+		   ((x << 3) & 32) |
+		   ((x << 5) & 64) |
+		   ((x << 7) & 128);
+}
+
 void fetch_next_sprite(PPU* ppu)
 {
 	/* TODO: If there are less than 8 sprites on the next scanline,
@@ -651,10 +664,24 @@ void fetch_next_sprite(PPU* ppu)
 			ppu->spr_x[si] = ppu->soam[(si*4)+3];
 			break;
 		case 5:		/* Fetch low byte of tile bitmap row from pattern table */
-			ppu->spr_bmp1[si] = ppu_mem_read(ppu, SPR_TBL(ppu) + ppu->soam[(si*4)+1]*16 + y);
+			if (ppu->spr_attr[si] & 0x80)
+				ppu->spr_bmp1[si] = ppu_mem_read(ppu, SPR_TBL(ppu) + ppu->soam[(si*4)+1]*16 + (7-y));
+			else
+				ppu->spr_bmp1[si] = ppu_mem_read(ppu, SPR_TBL(ppu) + ppu->soam[(si*4)+1]*16 + y);
+
+			/* TODO: clean up */
+			if (ppu->spr_attr[si] & 0x40)
+				ppu->spr_bmp1[si] = reverse_bits(ppu->spr_bmp1[si]);
 			break;
 		case 7:		/* Fetch high byte of tile bitmap row from pattern table */
-			ppu->spr_bmp2[si] = ppu_mem_read(ppu, SPR_TBL(ppu) + ppu->soam[(si*4)+1]*16 + 8 + y);
+			if (ppu->spr_attr[si] & 0x80)
+				ppu->spr_bmp2[si] = ppu_mem_read(ppu, SPR_TBL(ppu) + ppu->soam[(si*4)+1]*16 + 8 + (7-y));
+			else
+				ppu->spr_bmp2[si] = ppu_mem_read(ppu, SPR_TBL(ppu) + ppu->soam[(si*4)+1]*16 + 8 + y);
+
+			/* TODO: clean up */
+			if (ppu->spr_attr[si] & 0x40)
+				ppu->spr_bmp2[si] = reverse_bits(ppu->spr_bmp2[si]);
 			break;
 	}
 
