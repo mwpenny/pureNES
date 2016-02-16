@@ -155,6 +155,11 @@ static uint8_t oamdata_read(PPU* ppu)
 	   and loading; Micro Machines does this. */
 
 	/* TODO: and byte 2 with 0xE3 to set unused bits to 0 */
+
+	/* Attempting to read during rendering returns $FF (a signal
+	   is active that makes the read always return $FF)*/
+	if (ppu->scanline < 240 && ppu->cycle > 0 && ppu->cycle < 65)
+		return 0xFF;
 	return ppu->oam[ppu->oam_addr];
 }
 
@@ -178,6 +183,7 @@ static void oamdata_write(PPU* ppu, uint8_t val)
 	   the first 20 scanlines after the 2C07 signals vertical blanking. */
 
 	/* TODO: and byte 2 with 0xE3 to set unused bits to 0 */
+
 	ppu->oam[ppu->oam_addr++] = val;
 }
 
@@ -544,15 +550,159 @@ void fetch_next_bgtile(PPU* ppu)
 	}
 }
 
+void find_sprites(PPU* ppu)
+{
+	/* TODO: FEWER NESTED IFs!! */
+	/* TODO: 8x16 sprites */
+
+	static uint8_t si, oi, oam_buf, spr_found, ovr_check_done, oamend;
+
+	if (ppu->cycle == 0)
+	{
+		si = 0;
+		oi = 0;
+		spr_found = 0;
+		ovr_check_done = 0;
+		oamend = 0;
+	}
+	else if (ppu->cycle & 1)
+		oam_buf = oamdata_read(ppu);
+	else
+	{
+		/* Clear secondary OAM (reads will have returned $FF) */
+		if (ppu->cycle < 65)
+		{
+			ppu->soam[si] = oam_buf;
+			si = (si+1) & 31;
+		}
+
+		/* Discover first 8 sprites on this scanline */
+		else if (ppu->cycle < 257)
+		{
+			uint8_t oamaddr_inc = 0;
+
+			/* Less than 8 sprites found */
+			if (!oamend && si < 32)
+			{
+				/* Y-coord in range */
+				if (!spr_found && oam_buf < ppu->scanline+2 && oam_buf+8 > ppu->scanline)
+					spr_found = 1;
+
+				if (spr_found)
+				{
+					if ((si & 3) == 3)
+						spr_found = 0;
+					ppu->soam[si++] = oam_buf;
+					oamaddr_inc = 1;
+				}
+				else
+					oamaddr_inc = 4;
+			}
+
+			/* 8 sprites found. Do buggy overflow check for remaining sprites in OAM */
+			else if (!oamend && !ovr_check_done)
+			{
+				if (!ppu->spr_overflow && oam_buf < ppu->scanline+2 && oam_buf+8 > ppu->scanline)
+					ppu->spr_overflow = 1;
+
+				if (ppu->spr_overflow)
+				{
+					if ((oi++ & 3) == 3)
+						ovr_check_done = 1;
+					oamaddr_inc = 1;
+				}
+				/* 2C02 hardware bug! should only be incremented by 4 */
+				else
+					oamaddr_inc = 5;
+			}
+			else
+				oamaddr_inc = 4;
+
+			{uint16_t a = ppu->oam_addr + oamaddr_inc;
+			if (a > 255)
+				oamend = 1;
+			ppu->oam_addr = a & 0xFF;}
+		}
+	}
+}
+
+void fetch_next_sprite(PPU* ppu)
+{
+	/* TODO: If there are less than 8 sprites on the next scanline,
+			 then dummy fetches to tile $FF occur for the left-over sprites */
+
+	/* TODO: somehow combine with tile fetching logic */
+	uint8_t si = (ppu->cycle - 257)/8;
+	uint16_t y = ppu->scanline - ppu->soam[si*4]/* + 1 */;
+	static uint8_t ccount;
+
+	if (ppu->cycle == 257)
+		ccount = 0;
+
+	switch (ccount % 8)
+	{
+		/* TODO: For the first empty sprite slot, this will consist of sprite #63's Y-coordinate
+		   followed by 3 $FF bytes; for subsequent empty sprite slots, this will be four $FF bytes */
+
+		case 2:
+			ppu->spr_attr[si] = ppu->soam[(si*4)+2];
+			break;
+		case 3:
+			ppu->spr_x[si] = ppu->soam[(si*4)+3];
+			break;
+		case 5:		/* Fetch low byte of tile bitmap row from pattern table */
+			ppu->spr_bmp1[si] = ppu_mem_read(ppu, SPR_TBL(ppu) + ppu->soam[(si*4)+1]*16 + y);
+			break;
+		case 7:		/* Fetch high byte of tile bitmap row from pattern table */
+			ppu->spr_bmp2[si] = ppu_mem_read(ppu, SPR_TBL(ppu) + ppu->soam[(si*4)+1]*16 + 8 + y);
+			break;
+	}
+
+	++ccount;
+	ppu->oam_addr = 0;
+}
+
 void draw(PPU* ppu, RenderSurface screen)
 {
 	uint8_t pi = ((ppu->bg_bmp1 >> 15) & 1) | ((ppu->bg_bmp2 >> 14) & 2);
+	uint8_t spr_pi = 0;
+	uint8_t si = 0;
+
 	uint32_t color = ppu->pram[ppu->bg_attr*4 + pi];
+	uint8_t i = 0;
 
 	ppu->bg_bmp1 <<= 1;
 	ppu->bg_bmp2 <<= 1;
 
+	for (; i < 8; ++i)
+	{
+		/*if (ppu->spr_x[i] <= ppu->cycle)*/
+		if (ppu->spr_x[i] == 0)
+		{
+			ppu->spr_bmp1[i] <<= 1;
+			ppu->spr_bmp2[i] <<= 1;
+
+			/* First non-transparent pixel moves on to multiplexer */
+			if (spr_pi == 0)
+			{
+				spr_pi = ((ppu->spr_bmp1[i] >> 7) & 1) | ((ppu->spr_bmp2[i] >> 6) & 2);
+				si = i;
+			}
+		}
+		else
+			--ppu->spr_x[i];
+	}
+
+	/* TODO: "true" sprite0 check */
+	/*if (ppu->soam[si] == ppu->oam[0] && spr_pi != 0 && pi != 0)
+		ppu->szero_hit = 1;*/
+
 	render_pixel(screen, ppu->cycle, ppu->scanline, palette[color]);
+	if (spr_pi != 0)
+	{
+		uint32_t color = ppu->pram[16 + ((ppu->spr_attr[si]&3)*4) + spr_pi];
+		render_pixel(screen, ppu->cycle, ppu->scanline, palette[color]);
+	}
 }
 
 #define SL_RENDER(sl) (sl < 240)
@@ -573,7 +723,17 @@ void ppu_step(PPU* ppu, RenderSurface screen)
 		{
 			/* TODO: "garbage" NT fetches used by MMC5 */
 			if (CYC_RENDER(ppu->cycle) || CYC_PREFETCH(ppu->cycle))
+			{
+				/* TODO: have these functions return pixel values? */
 				fetch_next_bgtile(ppu);
+			}
+
+			if (SL_RENDER(ppu->scanline) && ppu->cycle < 257)
+				find_sprites(ppu);
+
+			/* TODO: have these functions return pixel values? */
+			if (ppu->cycle > 256 && ppu->cycle < 321)
+				fetch_next_sprite(ppu);
 
 			/* End of line */
 			if (ppu->cycle == 256)
@@ -600,6 +760,8 @@ void ppu_step(PPU* ppu, RenderSurface screen)
 	/* VBLANK start */
 	if (ppu->scanline == 241 && ppu->cycle == 1)
 	{
+		/*render_oam(ppu, screen);*/
+		/*render_nt(ppu, screen);*/
 		renderer_flip_surface(screen);
 		ppu->vblank_started = 1;
 		if (NMI_ENABLED(ppu))

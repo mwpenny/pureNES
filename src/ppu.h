@@ -70,8 +70,14 @@ typedef struct {
 	uint16_t scanline;
 	uint16_t cycle;
 
+	/* TODO: make everything below internal */
 	uint8_t bg_attr;
 	uint16_t bg_bmp1, bg_bmp2;
+
+	uint8_t soam[32]; /* Secondary OAM */
+	uint8_t spr_attr[8];
+	uint8_t spr_x[8];
+	uint8_t spr_bmp1[8], spr_bmp2[8];
 
 } PPU;
 
