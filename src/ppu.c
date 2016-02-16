@@ -585,7 +585,7 @@ void find_sprites(PPU* ppu)
 			if (!oamend && si < 32)
 			{
 				/* Y-coord in range */
-				if (!spr_found && oam_buf < ppu->scanline+2 && oam_buf+8 > ppu->scanline)
+				if (!spr_found && oam_buf < ppu->scanline+1 && oam_buf+8 > ppu->scanline)
 					spr_found = 1;
 
 				if (spr_found)
@@ -633,7 +633,7 @@ void fetch_next_sprite(PPU* ppu)
 
 	/* TODO: somehow combine with tile fetching logic */
 	uint8_t si = (ppu->cycle - 257)/8;
-	uint16_t y = ppu->scanline - ppu->soam[si*4]/* + 1 */;
+	uint16_t y = ppu->scanline - ppu->soam[si*4];
 	static uint8_t ccount;
 
 	if (ppu->cycle == 257)
@@ -679,15 +679,16 @@ void draw(PPU* ppu, RenderSurface screen)
 		/*if (ppu->spr_x[i] <= ppu->cycle)*/
 		if (ppu->spr_x[i] == 0)
 		{
+			/* TODO: shouldn't this go after? */
 			ppu->spr_bmp1[i] <<= 1;
 			ppu->spr_bmp2[i] <<= 1;
 
 			/* First non-transparent pixel moves on to multiplexer */
-			if (spr_pi == 0)
-			{
+			/*if (spr_pi == 0)
+			{*/
 				spr_pi = ((ppu->spr_bmp1[i] >> 7) & 1) | ((ppu->spr_bmp2[i] >> 6) & 2);
 				si = i;
-			}
+			/*}*/
 		}
 		else
 			--ppu->spr_x[i];
