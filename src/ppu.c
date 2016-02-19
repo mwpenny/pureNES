@@ -126,17 +126,24 @@ static void ppumask_write(PPU* ppu, uint8_t val)
 /* Handles reads from $2002 (PPU status register) */
 static uint8_t ppustatus_read(PPU* ppu)
 {
-	uint8_t ret = (ppu->vblank_started << 7) |
-				  (ppu->szero_hit << 6) |
-				  (ppu->spr_overflow << 5) |
-				  (ppu->io_latch & 0x1F);
+	uint8_t vbl, ret;
+
+	/* Reading PPUSTATUS at the exact start of vblank will
+	   return 0 in bit 7 but clear the latch anyway,
+	   causing the program to miss frames */
+	/* TODO: macro to check vblank? */
+	if (ppu->scanline == 241 && ppu->cycle == 1)
+		vbl = 0;
+	else
+		vbl = ppu->vblank_started;
+
+	ret = (vbl << 7) |
+		  (ppu->szero_hit << 6) |
+		  (ppu->spr_overflow << 5) |
+		  (ppu->io_latch & 0x1F);
 
 	ppu->vblank_started = 0;
 	ppu->w = 0;
-
-	/* TODO: Reading PPUSTATUS at the exact start of vblank will
-	   return 0 in bit 7 but clear the latch anyway,
-	   causing the program to miss frames */
 
 	return ret;
 }
@@ -150,14 +157,8 @@ static void oamaddr_write(PPU* ppu, uint8_t val)
 /* Handles reads from $2004 (OAM data port) */
 static uint8_t oamdata_read(PPU* ppu)
 {
-	/* TODO: Reading OAMDATA while the PPU is rendering will
-	   expose internal OAM accesses during sprite evaluation
-	   and loading; Micro Machines does this. */
-
-	/* TODO: and byte 2 with 0xE3 to set unused bits to 0 */
-
 	/* Attempting to read during rendering returns $FF (a signal
-	   is active that makes the read always return $FF)*/
+	   is active that makes the read always return $FF) */
 	if (ppu->scanline < 240 && ppu->cycle > 0 && ppu->cycle < 65)
 		return 0xFF;
 	return ppu->oam[ppu->oam_addr];
@@ -251,7 +252,9 @@ static uint8_t ppudata_read(PPU* ppu)
 
 	/* TODO: During rendering (on the pre-render line and the visible lines 0-239,
 	   provided either background or sprite rendering is enabled),
-	   it will update v in an odd way... */
+	   it will update v in an odd way...
+	   
+	   Used by Young Indiana Jones Chronicles and Burai Fighter */
 
 	/* Increment VRAM address */
 	ppu->v += VADDR_INC(ppu);
@@ -266,7 +269,9 @@ static void ppudata_write(PPU* ppu, uint8_t val)
 
 	/* TODO: During rendering (on the pre-render line and the visible lines 0-239,
 	   provided either background or sprite rendering is enabled),
-	   it will update v in an odd way... */
+	   it will update v in an odd way...
+	   
+	   Used by Young Indiana Jones Chronicles and Burai Fighter */
 
 	/* Increment VRAM address */
 	ppu->v += VADDR_INC(ppu);
@@ -296,6 +301,7 @@ void ppu_init(PPU* ppu, NES* nes)
 
 /*** PPU access via memory-mapped registers ***/
 
+/* TODO: lookup table? */
 void ppu_write(PPU* ppu, uint16_t addr, uint8_t val)
 {
 	ppu->io_latch = val;
