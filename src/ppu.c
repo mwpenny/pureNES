@@ -465,7 +465,6 @@ static uint8_t tile_get_palette(PPU* ppu)
 
 	   Shift right 2 every 4 X tiles (right 2x2 subregions in 4x4 tile regions).
 	   Shift right 4 every 4 Y tiles (bottom 2x2 subregions in 4x4 tile regions). */
-
 	return (ppu_mem_read(ppu, addr) >>
 			((ppu->v & 2) | ((ppu->v >> 4) & 4))) & 3;
 }
@@ -523,7 +522,7 @@ static void scroll_inc_y(PPU* ppu)
 
 void fetch_next_bgtile(PPU* ppu)
 {
-	static uint8_t nt_byte = 0;
+	static uint8_t nt_byte = 0, attr_byte = 0;
 	static uint32_t tile_bmap_low = 0, tile_bmap_hi = 0;
 
 	switch (ppu->cycle % 8)
@@ -532,7 +531,7 @@ void fetch_next_bgtile(PPU* ppu)
 			nt_byte = ppu_mem_read(ppu, 0x2000 | (ppu->v & 0xFFF));
 			break;
 		case 3:		/* Fetch tile attribute */
-			ppu->bg_attr = tile_get_palette(ppu);
+			attr_byte = tile_get_palette(ppu);
 			break;
 		case 5:		/* Fetch low byte of tile bitmap row from pattern table */
 			tile_bmap_low = bg_tile_get_sliver(ppu, nt_byte, 0);
@@ -541,6 +540,9 @@ void fetch_next_bgtile(PPU* ppu)
 			tile_bmap_hi = bg_tile_get_sliver(ppu, nt_byte, 1);
 			break;
 		case 0:		/* Move data from internal latches to shift registers */
+			ppu->bg_attr1 = ppu->bg_attr2;
+			ppu->bg_attr2 = attr_byte;
+
 			ppu->bg_bmp1 = (ppu->bg_bmp1 & 0xFF00) | tile_bmap_low;
 			ppu->bg_bmp2 = (ppu->bg_bmp2 & 0xFF00) | tile_bmap_hi;
 
@@ -618,6 +620,7 @@ void find_sprites(PPU* ppu)
 			else
 				oamaddr_inc = 4;
 
+			/* TODO: cleanup */
 			{uint16_t a = ppu->oam_addr + oamaddr_inc;
 			if (a > 255)
 				oamend = 1;
@@ -629,14 +632,14 @@ void find_sprites(PPU* ppu)
 uint8_t reverse_bits(uint8_t x)
 {
 	/* TODO: more efficient way to do this? */
-	return ((x >> 7) & 1) | 
-		   ((x >> 5) & 2) |
-		   ((x >> 3) & 4) |
-		   ((x >> 1) & 8) |
-		   ((x << 1) & 16) |
-		   ((x << 3) & 32) |
-		   ((x << 5) & 64) |
-		   ((x << 7) & 128);
+	/*x = ((x & 0xF0) >> 4) | ((x & 0x0F) << 4); /* swap nibbles */
+	/*x = ((x & 0xCC) >> 2) | ((x & 0x33) << 2); /* swap bit pairs */
+	/*return ((x & 0xAA) >> 1) | ((x & 0x55) << 1); /* swap single bits */
+
+	return ((x >> 7) & 1) | ((x >> 5) & 2) |
+		   ((x >> 3) & 4) | ((x >> 1) & 8) |
+		   ((x << 1) & 16) | ((x << 3) & 32) |
+		   ((x << 5) & 64) | ((x << 7) & 128);
 }
 
 void fetch_next_sprite(PPU* ppu)
@@ -695,7 +698,7 @@ void draw(PPU* ppu, RenderSurface screen)
 	uint8_t spr_pi = 0;
 	uint8_t si = 0;
 
-	uint32_t color = ppu->pram[ppu->bg_attr*4 + pi];
+	uint32_t color = ppu->pram[ppu->bg_attr1*4 + pi];
 	uint8_t i = 0;
 
 	ppu->bg_bmp1 <<= 1;
@@ -707,30 +710,54 @@ void draw(PPU* ppu, RenderSurface screen)
 		if (ppu->spr_x[i] == 0)
 		{
 			/* TODO: shouldn't this go after? */
-			ppu->spr_bmp1[i] <<= 1;
-			ppu->spr_bmp2[i] <<= 1;
 
 			/* First non-transparent pixel moves on to multiplexer */
-			/*if (spr_pi == 0)
-			{*/
+			if (spr_pi == 0)
+			{
 				spr_pi = ((ppu->spr_bmp1[i] >> 7) & 1) | ((ppu->spr_bmp2[i] >> 6) & 2);
 				si = i;
-			/*}*/
+			}
+			ppu->spr_bmp1[i] <<= 1;
+			ppu->spr_bmp2[i] <<= 1;
 		}
 		else
 			--ppu->spr_x[i];
 	}
 
-	/* TODO: "true" sprite0 check */
-	/*if (ppu->soam[si] == ppu->oam[0] && spr_pi != 0 && pi != 0)
-		ppu->szero_hit = 1;*/
+	/* Sprite 0 hit does not happen: 
+		[CHECK] If background or sprite rendering is disabled in PPUMASK ($2001)
+		At x=0 to x=7 if the left-side clipping window is enabled (if bit 2 or bit 1 of PPUMASK is 0).
+		At x=255, for an obscure reason related to the pixel pipeline.
+		[CHECK] At any pixel where the background or sprite pixel is transparent (2-bit color index from the CHR pattern is %00).
+		[CHECK] If sprite 0 hit has already occurred this frame. Bit 6 of PPUSTATUS ($2002) is cleared to 0 at dot 1 of the pre-render line. This means only the first sprite 0 hit in a frame can be detected.
+ 
+	   Sprite 0 hit happens regardless of the following: 
+		[CHECK] Sprite priority. Sprite 0 can still hit the background from behind.
+		[CHECK] The pixel colors. Only the CHR pattern bits are relevant, not the actual rendered colors, and any CHR color index except %00 is considered opaque.
+		[CHECK] The palette. The contents of the palette are irrelevant to sprite 0 hits. For example: a black ($0F) sprite pixel can hit a black ($0F) background as long as neither is the transparent color index %00.
+		The PAL PPU blanking on the left and right edges at x=0, x=1, and x=254 (see Overscan). */
 
+	/* TODO: better organize this */
+	if (BG_ENABLED(ppu) && spr_pi !=0 && pi != 0 && !memcmp(ppu->oam, ppu->soam+si, 4))
+		ppu->szero_hit = 1;
+
+	/* TODO: sprite priority */
 	render_pixel(screen, ppu->cycle, ppu->scanline, palette[color]);
 	if (spr_pi != 0)
 	{
 		uint32_t color = ppu->pram[16 + ((ppu->spr_attr[si]&3)*4) + spr_pi];
 		render_pixel(screen, ppu->cycle, ppu->scanline, palette[color]);
 	}
+
+	/*** Debug grid ***/
+	/*if (ppu->cycle % 8 == 0 || ppu->scanline % 8 == 0)
+		render_pixel(screen, ppu->cycle, ppu->scanline, palette[16]);
+
+	if (ppu->cycle % 16 == 0 || ppu->scanline % 16 == 0)
+		render_pixel(screen, ppu->cycle, ppu->scanline, palette[18]);
+
+	if (ppu->cycle % 32 == 0 || ppu->scanline % 32 == 0)
+		render_pixel(screen, ppu->cycle, ppu->scanline, palette[6]);*/
 }
 
 #define SL_RENDER(sl) (sl < 240)
@@ -742,7 +769,6 @@ void ppu_step(PPU* ppu, RenderSurface screen)
 {
 	/* TODO: ***read*** / write on correct cycles */
 	/* TODO: init SL to 240 */
-	/* TODO: sprite eval. */
 
 	if (BG_ENABLED(ppu) || SPR_ENABLED(ppu))
 	{
@@ -750,16 +776,14 @@ void ppu_step(PPU* ppu, RenderSurface screen)
 		if (SL_RENDER(ppu->scanline) || SL_PRERENDER(ppu->scanline))
 		{
 			/* TODO: "garbage" NT fetches used by MMC5 */
+			/* TODO: have this function return a pixel value? */
 			if (CYC_RENDER(ppu->cycle) || CYC_PREFETCH(ppu->cycle))
-			{
-				/* TODO: have these functions return pixel values? */
 				fetch_next_bgtile(ppu);
-			}
 
 			if (SL_RENDER(ppu->scanline) && ppu->cycle < 257)
 				find_sprites(ppu);
 
-			/* TODO: have these functions return pixel values? */
+			/* TODO: have this function return a pixel value? */
 			if (ppu->cycle > 256 && ppu->cycle < 321)
 				fetch_next_sprite(ppu);
 
@@ -781,7 +805,7 @@ void ppu_step(PPU* ppu, RenderSurface screen)
 			ppu->v = (ppu->v & 0x41F) | (ppu->t & 0x7BE0);
 		}
 
-		if (SL_RENDER(ppu->scanline) && CYC_RENDER(ppu->cycle))
+		if (SL_RENDER(ppu->scanline) && ppu->cycle > /*0*/-1 && ppu->cycle < 257)
 			draw(ppu, screen);
 	}
 

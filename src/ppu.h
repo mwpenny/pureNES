@@ -71,7 +71,7 @@ typedef struct {
 	uint16_t cycle;
 
 	/* TODO: make everything below internal */
-	uint8_t bg_attr;
+	uint8_t bg_attr1, bg_attr2;
 	uint16_t bg_bmp1, bg_bmp2;
 
 	uint8_t soam[32]; /* Secondary OAM */
