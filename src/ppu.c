@@ -476,13 +476,75 @@ static uint8_t bg_get_tile_palette(PPU* ppu)
 }
 static uint8_t bg_get_tile_sliver(PPU* ppu, uint8_t tile, uint8_t hb)
 {
-	/* Fetch byte of tile bitmap row from pattern table */
+	/* Fetch byte of background tile bitmap row from pattern table */
+	/* TODO: deduce low/high byte from address? */
 	/* TODO: get once. Don't need EXACT hb/lb sliver behavior? (probably not).
 
 	   We're our own people, we can make our own data structures,
 	   with blackjack and hookers! */
 	uint8_t fineY = (ppu->v >> 12) & 7;
 	return ppu_mem_read(ppu, BG_TBL(ppu) + tile*16 + fineY + hb*8);
+}
+
+static uint8_t reverse_bits(uint8_t x)
+{
+	/* TODO: more efficient way to do this? */
+	/*x = ((x & 0xF0) >> 4) | ((x & 0x0F) << 4); /* swap nibbles */
+	/*x = ((x & 0xCC) >> 2) | ((x & 0x33) << 2); /* swap bit pairs */
+	/*return ((x & 0xAA) >> 1) | ((x & 0x55) << 1); /* swap single bits */
+
+	return ((x >> 7) & 1) | ((x >> 5) & 2) |
+		   ((x >> 3) & 4) | ((x >> 1) & 8) |
+		   ((x << 1) & 16) | ((x << 3) & 32) |
+		   ((x << 5) & 64) | ((x << 7) & 128);
+}
+
+static uint8_t spr_get_tile_sliver(PPU* ppu, uint8_t si, uint8_t hb)
+{
+	/* Fetch byte of sprite tile bitmap row from pattern table */
+	/* TODO: deduce low/high byte from address? */
+	/* TODO: get once. Don't need EXACT hb/lb sliver behavior? (probably not).
+
+	   We're our own people, we can make our own data structures,
+	   with blackjack and hookers! */
+	uint16_t y = ppu->scanline - ppu->soam[si*4];
+	uint8_t attr = ppu->spr_attr[si];
+	uint8_t tile = ppu->soam[si*4+1];
+
+	uint16_t addr;
+	uint8_t sliver;
+
+	/* 8x16 sprites */
+	if (ppu->ppuctrl & 0x20)
+	{
+		/* Vertical flip */
+		if (attr & 0x80)
+			y = 15 - y;
+
+		/* Tile bit 0 is used for pattern table select.
+
+		   Bits 1-7 are used for the top tile number. The
+		   bottom tile is the next one in the pattern table. */
+		addr = (tile&1)*0x1000;
+		tile = (tile & 0xFE) + (y/8);
+		y -= y & 8;
+	}
+
+	/* 8x8 sprites */
+	else
+	{
+		/* Vertical flip */
+		if (attr & 0x80)
+			y = 7 - y;
+		addr = SPR_TBL(ppu);
+	}
+
+	sliver = ppu_mem_read(ppu, addr + tile*16 + y + hb*8);
+
+	/* Horizontal flip */
+	if (attr & 0x40)
+		return reverse_bits(sliver);
+	return sliver;
 }
 
 static void scroll_inc_x(PPU* ppu)
@@ -560,7 +622,8 @@ void bg_fetch_tile(PPU* ppu)
 void find_sprites(PPU* ppu)
 {
 	/* TODO: FEWER NESTED IFs!! */
-	/* TODO: 8x16 sprites */
+
+	uint8_t spr_height = ((ppu->ppuctrl & 0x20) >> 5)*8 + 8;
 
 	static uint8_t si, oi, spr_found, ovr_check_done, oamend;
 
@@ -592,7 +655,7 @@ void find_sprites(PPU* ppu)
 			if (!oamend && si < 32)
 			{
 				/* Y-coord in range */
-				if (!spr_found && oam_buf < ppu->scanline+1 && oam_buf+8 > ppu->scanline)
+				if (!spr_found && oam_buf < ppu->scanline+1 && oam_buf+spr_height > ppu->scanline)
 					spr_found = 1;
 
 				if (spr_found)
@@ -609,7 +672,7 @@ void find_sprites(PPU* ppu)
 			/* 8 sprites found. Do buggy overflow check for remaining sprites in OAM */
 			else if (!oamend && !ovr_check_done)
 			{
-				if (!ppu->spr_overflow && oam_buf < ppu->scanline+2 && oam_buf+8 > ppu->scanline)
+				if (!ppu->spr_overflow && oam_buf < ppu->scanline+2 && oam_buf+spr_height > ppu->scanline)
 					ppu->spr_overflow = 1;
 
 				if (ppu->spr_overflow)
@@ -632,19 +695,6 @@ void find_sprites(PPU* ppu)
 			ppu->oam_addr = a & 0xFF;}
 		}
 	}
-}
-
-uint8_t reverse_bits(uint8_t x)
-{
-	/* TODO: more efficient way to do this? */
-	/*x = ((x & 0xF0) >> 4) | ((x & 0x0F) << 4); /* swap nibbles */
-	/*x = ((x & 0xCC) >> 2) | ((x & 0x33) << 2); /* swap bit pairs */
-	/*return ((x & 0xAA) >> 1) | ((x & 0x55) << 1); /* swap single bits */
-
-	return ((x >> 7) & 1) | ((x >> 5) & 2) |
-		   ((x >> 3) & 4) | ((x >> 1) & 8) |
-		   ((x << 1) & 16) | ((x << 3) & 32) |
-		   ((x << 5) & 64) | ((x << 7) & 128);
 }
 
 void fetch_next_sprite(PPU* ppu)
@@ -672,24 +722,10 @@ void fetch_next_sprite(PPU* ppu)
 			ppu->spr_x[si] = ppu->soam[(si*4)+3];
 			break;
 		case 5:		/* Fetch low byte of tile bitmap row from pattern table */
-			if (ppu->spr_attr[si] & 0x80)
-				ppu->spr_bmp1[si] = ppu_mem_read(ppu, SPR_TBL(ppu) + ppu->soam[(si*4)+1]*16 + (7-y));
-			else
-				ppu->spr_bmp1[si] = ppu_mem_read(ppu, SPR_TBL(ppu) + ppu->soam[(si*4)+1]*16 + y);
-
-			/* TODO: clean up */
-			if (ppu->spr_attr[si] & 0x40)
-				ppu->spr_bmp1[si] = reverse_bits(ppu->spr_bmp1[si]);
+			ppu->spr_bmp1[si] = spr_get_tile_sliver(ppu, si, 0);
 			break;
 		case 7:		/* Fetch high byte of tile bitmap row from pattern table */
-			if (ppu->spr_attr[si] & 0x80)
-				ppu->spr_bmp2[si] = ppu_mem_read(ppu, SPR_TBL(ppu) + ppu->soam[(si*4)+1]*16 + 8 + (7-y));
-			else
-				ppu->spr_bmp2[si] = ppu_mem_read(ppu, SPR_TBL(ppu) + ppu->soam[(si*4)+1]*16 + 8 + y);
-
-			/* TODO: clean up */
-			if (ppu->spr_attr[si] & 0x40)
-				ppu->spr_bmp2[si] = reverse_bits(ppu->spr_bmp2[si]);
+			ppu->spr_bmp2[si] = spr_get_tile_sliver(ppu, si, 1);
 			break;
 	}
 
