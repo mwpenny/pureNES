@@ -60,7 +60,7 @@ typedef struct {
 	uint8_t vblank_started;
 
 	uint8_t oam_addr;
-	uint8_t data_buf;
+	uint8_t data_buf;	/* For buffered reads from PPUDATA ($2007) */
 
 	/* PPU memory */
 	uint8_t vram[2048];

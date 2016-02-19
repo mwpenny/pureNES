@@ -182,8 +182,9 @@ static void oamdata_write(PPU* ppu, uint8_t val)
 	   As such, you must upload anything to OAM that you intend to within
 	   the first 20 scanlines after the 2C07 signals vertical blanking. */
 
-	/* TODO: and byte 2 with 0xE3 to set unused bits to 0 */
-
+	/* Zero out unused bits in attribute byte */
+	if ((ppu->oam_addr & 3) == 2)
+		val &= 0xE3;
 	ppu->oam[ppu->oam_addr++] = val;
 }
 
@@ -357,6 +358,7 @@ uint8_t ppu_read(PPU* ppu, uint16_t addr)
 	}
 }
 
+/*** Debug functions ***/
 void render_palettes(PPU* ppu, RenderSurface screen)
 {
 	uint8_t i = 0;
@@ -367,7 +369,6 @@ void render_palettes(PPU* ppu, RenderSurface screen)
 
 	renderer_flip_surface(screen);
 }
-
 void render_nt(PPU* ppu, RenderSurface screen)
 {
 	int i = 0, row, pixel;
@@ -404,7 +405,6 @@ void render_nt(PPU* ppu, RenderSurface screen)
 		}
 	}
 }
-
 void render_oam(PPU* ppu, RenderSurface screen)
 {
 	int i = 0, row, pixel;
@@ -440,7 +440,7 @@ void render_oam(PPU* ppu, RenderSurface screen)
 	}
 }
 
-static uint8_t tile_get_palette(PPU* ppu)
+static uint8_t bg_get_tile_palette(PPU* ppu)
 {
 	/* Fetch attribute byte for current tile */
 
@@ -468,8 +468,7 @@ static uint8_t tile_get_palette(PPU* ppu)
 	return (ppu_mem_read(ppu, addr) >>
 			((ppu->v & 2) | ((ppu->v >> 4) & 4))) & 3;
 }
-
-static uint8_t bg_tile_get_sliver(PPU* ppu, uint8_t tile, uint8_t hb)
+static uint8_t bg_get_tile_sliver(PPU* ppu, uint8_t tile, uint8_t hb)
 {
 	/* Fetch byte of tile bitmap row from pattern table */
 	/* TODO: get once. Don't need EXACT hb/lb sliver behavior? (probably not).
@@ -520,7 +519,7 @@ static void scroll_inc_y(PPU* ppu)
 		ppu->v += 0x1000;
 }
 
-void fetch_next_bgtile(PPU* ppu)
+void bg_fetch_tile(PPU* ppu)
 {
 	static uint8_t nt_byte = 0, attr_byte = 0;
 	static uint32_t tile_bmap_low = 0, tile_bmap_hi = 0;
@@ -531,13 +530,13 @@ void fetch_next_bgtile(PPU* ppu)
 			nt_byte = ppu_mem_read(ppu, 0x2000 | (ppu->v & 0xFFF));
 			break;
 		case 3:		/* Fetch tile attribute */
-			attr_byte = tile_get_palette(ppu);
+			attr_byte = bg_get_tile_palette(ppu);
 			break;
 		case 5:		/* Fetch low byte of tile bitmap row from pattern table */
-			tile_bmap_low = bg_tile_get_sliver(ppu, nt_byte, 0);
+			tile_bmap_low = bg_get_tile_sliver(ppu, nt_byte, 0);
 			break;
 		case 7:		/* Fetch high byte of tile bitmap row from pattern table */
-			tile_bmap_hi = bg_tile_get_sliver(ppu, nt_byte, 1);
+			tile_bmap_hi = bg_get_tile_sliver(ppu, nt_byte, 1);
 			break;
 		case 0:		/* Move data from internal latches to shift registers */
 			ppu->bg_attr1 = ppu->bg_attr2;
@@ -557,7 +556,7 @@ void find_sprites(PPU* ppu)
 	/* TODO: FEWER NESTED IFs!! */
 	/* TODO: 8x16 sprites */
 
-	static uint8_t si, oi, oam_buf, spr_found, ovr_check_done, oamend;
+	static uint8_t si, oi, spr_found, ovr_check_done, oamend;
 
 	if (ppu->cycle == 0)
 	{
@@ -567,10 +566,10 @@ void find_sprites(PPU* ppu)
 		ovr_check_done = 0;
 		oamend = 0;
 	}
-	else if (ppu->cycle & 1)
-		oam_buf = oamdata_read(ppu);
-	else
+	else if ((ppu->cycle & 1) == 0)
 	{
+		uint8_t oam_buf = oamdata_read(ppu);
+
 		/* Clear secondary OAM (reads will have returned $FF) */
 		if (ppu->cycle < 65)
 		{
@@ -778,8 +777,9 @@ void ppu_step(PPU* ppu, RenderSurface screen)
 			/* TODO: "garbage" NT fetches used by MMC5 */
 			/* TODO: have this function return a pixel value? */
 			if (CYC_RENDER(ppu->cycle) || CYC_PREFETCH(ppu->cycle))
-				fetch_next_bgtile(ppu);
+				bg_fetch_tile(ppu);
 
+			/* TODO: this still happens if rendering is disabled! */
 			if (SL_RENDER(ppu->scanline) && ppu->cycle < 257)
 				find_sprites(ppu);
 
