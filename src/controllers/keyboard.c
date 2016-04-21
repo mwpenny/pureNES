@@ -19,14 +19,17 @@ static uint8_t poll()
 	/* Poll the keyboard and return the state of relevant keys */
 
 	uint8_t* keys = SDL_GetKeyState(NULL);
-	return keys[KEY_A] |
+
+	/* Use 0 for pressed button because this returned value
+	   will be inverted before being returned to the CPU */
+	return ~(keys[KEY_A] |
 		   (keys[KEY_B] << 1) |
 		   (keys[KEY_SELECT] << 2) |
 		   (keys[KEY_START] << 3) |
 		   (keys[KEY_UP] << 4) |
 		   (keys[KEY_DOWN] << 5) |
 		   (keys[KEY_LEFT] << 6) |
-		   (keys[KEY_RIGHT] << 7);
+		   (keys[KEY_RIGHT] << 7));
 }
 
 void controller_kb_init(Controller* c)

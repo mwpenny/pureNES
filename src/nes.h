@@ -16,7 +16,8 @@ typedef struct NES
 {
 	CPU cpu;
 	PPU ppu;
-	Controller c1; /* TODO: multiple controllers / peripherals */
+	Controller c1;
+	Controller c2;
 	uint8_t ram[RAMSIZE];	
 	Game game;
 } NES;

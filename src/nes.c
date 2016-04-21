@@ -14,6 +14,7 @@ void nes_init(NES* nes)
 	cpu_init(&nes->cpu, nes);
 	ppu_init(&nes->ppu, nes);
 	controller_kb_init(&nes->c1);
+	controller_kb_init(&nes->c2);
 }
 
 void nes_load_rom(NES* nes, char* path)
@@ -34,4 +35,5 @@ void nes_update(NES* nes, SDL_Surface* screen)
 
 	/* TODO: move this out of emulator (make emu a DLL and update controllers in front-end?) */
 	controller_update(&nes->c1);
+	/*controller_update(&nes->c2);*/
 }

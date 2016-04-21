@@ -41,6 +41,8 @@ uint8_t memory_get(NES* nes, uint16_t addr)
 	/* TODO: finish this / support multiple controllers and/or peripherals */
 	else if (addr == 0x4016)
 		return controller_read_output(&nes->c1);
+	/*else if (addr == 0x4017)
+		return controller_read_output(&nes->c2);
 	/* TODO: read from other areas */
 	else if (addr > 0x7FFF && addr < 0xC000)
 		return nes->game.prg1[addr - 0x8000];
