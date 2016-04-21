@@ -10,7 +10,6 @@
 #define INT_RST 1
 #define INT_NMI 2
 #define INT_IRQ 3
-#define INT_BRK 4
 
 /*** Interrupt vectors ***/
 #define ADDR_NMI 0xFFFA

@@ -39,6 +39,15 @@ void cpu_reset(CPU* cpu)
 	/* after reset, APU is silenced */
 }
 
+/* Jump to interrupt vector. Common behavior to NMI, IRQ, and BRK */
+static void jmi(CPU* cpu, uint16_t vector) {
+	memory_set(cpu->nes, 0x100 | cpu->sp--, (cpu->pc) >> 8);
+	memory_set(cpu->nes, 0x100 | cpu->sp--, (cpu->pc) & 0xFF);
+	cpu_PHP(cpu, NULL);
+	cpu_SEI(cpu, NULL);
+	cpu->pc = memory_get16(cpu->nes, vector);
+}
+
 static void handle_interrupt(CPU* cpu, uint8_t type)
 {
 	OCInfo oci = {0, 0};
@@ -51,23 +60,17 @@ static void handle_interrupt(CPU* cpu, uint8_t type)
 		cpu_reset(cpu);
 		break;
 	case INT_NMI:
-		oci.operand = memory_get16(cpu->nes, ADDR_NMI);
+		jmi(cpu, ADDR_NMI);
 		cpu->cycles += 7;
 		break;
 	case INT_IRQ:
-		cpu->cycles += 7;
-	case INT_BRK:
-		/* don't set address if IRQs are disabled */
-		if (!(cpu->p & MASK_I)) oci.operand = memory_get16(cpu->nes, ADDR_IRQ);
+		/* Don't handle interrupt if IRQs are masked */
+		if (!(cpu->p & MASK_I)) {
+			jmi(cpu, ADDR_IRQ);
+			cpu->cycles += 7;
+		}
 	}
 
-	/* operand set --> valid interrupt type / IRQs not disabled */
-	if (oci.operand)
-	{
-		cpu_JSR(cpu, &oci);
-		cpu_PHP(cpu, NULL);
-		cpu_SEI(cpu, &oci);
-	}
 	cpu->interrupt = INT_NUL;
 }
 
@@ -78,24 +81,28 @@ int cpu_step(CPU* cpu)
 	/*static FILE* log;*/
 	OCInfo oci;
 
+	cpu->cycles = 0;
+
 	if (cpu->dma_cycles)
 	{
 		--cpu->dma_cycles;
 		return 1;
 	}
 
-	if (cpu->interrupt != INT_NUL)
+	if (cpu->interrupt != INT_NUL) {
 		handle_interrupt(cpu, cpu->interrupt);
+		return cpu->cycles;
+	}
 
 	/*log = fopen("cpu.log", "a");*/
 
 	oci.opcode = memory_get(cpu->nes, cpu->pc++);
-	printf("%X\t%s ", cpu->pc-1, oc_names[oci.opcode]);
+	/*printf("%X\t%s ", cpu->pc-1, oc_names[oci.opcode]);
 	/*fprintf(log, "%X\t%s ", cpu->pc-1, oc_names[oci.opcode]);*/
 	amodes[oci.opcode](cpu, &oci);
 	/*fprintf(log, "PC:%x\tOPCODE:%s\tOPERAND:%x\tBYTES:%x\n", cpu->pc, oc_names[oci.opcode], oci.operand, instruction_cycles[oci.opcode]);*/
 	/*fprintf(log, "$%.4x\t\t\t", oci.operand);*/
-	printf("$%.4x\t\t\t", oci.operand);
+	/*printf("$%.4x\t\t\t", oci.operand);
 	printf("A:%.2X X:%.2X Y:%.2X P:%.2X SP:%.2X\n", cpu->a, cpu->x, cpu->y, cpu->p, cpu->sp);
 
 	/*fprintf(log, "A:%.2X X:%.2X Y:%.2X P:%.2X SP:%.2X\n", cpu->a, cpu->x, cpu->y, cpu->p, cpu->sp);
@@ -642,7 +649,7 @@ void cpu_BNE(CPU* cpu, OCInfo* oci)
 		branch(cpu, (uint8_t)oci->operand);
 }
 
-/* BPL - branch if negative flag set */
+/* BPL - branch if negative flag clear */
 void cpu_BPL(CPU* cpu, OCInfo* oci)
 {
 	if (!(cpu->p & MASK_N))
@@ -714,11 +721,7 @@ void cpu_SEI(CPU* cpu, OCInfo* oci)
 /* BRK - interrupt */
 void cpu_BRK(CPU* cpu, OCInfo* oci)
 {
-	memory_set(cpu->nes, 0x100 | cpu->sp--, (cpu->pc) >> 8);
-	memory_set(cpu->nes, 0x100 | cpu->sp--, (cpu->pc) & 0xFF);
-	cpu_PHP(cpu, oci);
-	cpu_SEI(cpu, oci);
-	cpu->pc = memory_get16(cpu->nes, ADDR_IRQ);
+	jmi(cpu, ADDR_IRQ);
 }
 
 /* NOP - no operation */
