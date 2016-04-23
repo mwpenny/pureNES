@@ -77,6 +77,10 @@ static uint8_t ppu_mem_read(PPU* ppu, uint16_t addr)
 		   $3F10/$3F14/$3F18/$3F1C mirror $3F00/$3F04/$3F08/$3F0C */
 		if (a > 15 && (a % 4) == 0)
 			a = 0;
+
+		/* Grayscale */
+		if (ppu->ppumask & 1)
+			return ppu->pram[a] & 0x30;
 		return ppu->pram[a];
 	}
 	else
@@ -809,7 +813,7 @@ void draw(PPU* ppu, RenderSurface screen)
 	   has foreground priority. */
 	if (spr_pi != 0 && (pi == 0 || !(ppu->spr_attr[si] & 0x20)))
 		color = ppu_mem_read(ppu, 0x3F10 | ((ppu->spr_attr[si]&3)*4) + spr_pi);
-	
+
 	render_pixel(screen, ppu->cycle, ppu->scanline, palette[color]);
 
 
