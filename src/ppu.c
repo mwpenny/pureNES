@@ -751,12 +751,14 @@ void fetch_next_sprite(PPU* ppu)
 
 void draw(PPU* ppu, RenderSurface screen)
 {
-	uint8_t pi = ((ppu->bg_bmp1 >> 15) & 1) | ((ppu->bg_bmp2 >> 14) & 2);
+	uint8_t fxo = 15 - ppu->x; /* Fine X offset */
+	uint8_t pi = ((ppu->bg_bmp1 >> fxo) & 1) | ((ppu->bg_bmp2 >> (fxo-1)) & 2);
 	uint8_t spr_pi = 0;
 	uint8_t si = 0;
 
+	/* TODO: look into background palette hack */
 	/* Palette background mirroring. Although $3F04/$3F08/$3F0C (the
-	   background palettes' background color can contain unique data,
+	   background palettes' background color) can contain unique data,
 	   only the universal background color is used during rendering. */
 	uint32_t color = (pi == 0) ? ppu_mem_read(ppu, 0x3F00) :
 		ppu_mem_read(ppu, 0x3F00 | (ppu->bg_attr1*4 + pi));
