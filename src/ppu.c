@@ -68,8 +68,14 @@ static uint8_t ppu_mem_read(PPU* ppu, uint16_t addr)
 	/* Palettes ($3F00-$3F1F; mirrored at $3F20-$3FFF) */
 	else if (addr < 0x4000)
 	{
-		/* TODO: palette background mirroring */
-		return ppu->pram[(addr-0x3F00)%0x20];
+		/* TODO: look into background palette hack */
+
+		uint8_t a = (addr-0x3F00)%0x20;
+
+		/* Palette background mirroring */
+		if (a > 15 && (a % 4) == 0)
+			a = 0;
+		return ppu->pram[a];
 	}
 	else
 	{
@@ -98,8 +104,14 @@ static void ppu_mem_write(PPU* ppu, uint16_t addr, uint8_t val)
 	/* Palettes ($3F00-$3F1F; mirrored at $3F20-$3FFF) */
 	else if (addr < 0x4000)
 	{
-		/* TODO: palette background mirroring */
-		ppu->pram[(addr-0x3F00)%0x20] = val;
+		/* TODO: look into background palette hack */
+
+		uint8_t a = (addr-0x3F00)%0x20;
+
+		/* Palette background mirroring */
+		if (a > 15 && (a % 4) == 0)
+			a = 0;
+		ppu->pram[a] = val;
 	}
 	else
 	{
