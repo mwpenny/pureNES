@@ -794,13 +794,14 @@ void draw(PPU* ppu, RenderSurface screen)
 	if (BG_ENABLED(ppu) && spr_pi !=0 && pi != 0 && !memcmp(ppu->oam, ppu->soam+si, 4))
 		ppu->szero_hit = 1;
 
-	/* TODO: sprite priority */
+
+	/* Sprite pixel is shown if the background pixel is transparent or the sprite
+	   has foreground priority. */
+	if (spr_pi != 0 && (pi == 0 || !(ppu->spr_attr[si] & 0x20)))
+		color = ppu->pram[16 + ((ppu->spr_attr[si]&3)*4) + spr_pi];
+
 	render_pixel(screen, ppu->cycle, ppu->scanline, palette[color]);
-	if (spr_pi != 0)
-	{
-		uint32_t color = ppu->pram[16 + ((ppu->spr_attr[si]&3)*4) + spr_pi];
-		render_pixel(screen, ppu->cycle, ppu->scanline, palette[color]);
-	}
+
 
 	/*** Debug grid ***/
 	/*if (ppu->cycle % 8 == 0 || ppu->scanline % 8 == 0)
