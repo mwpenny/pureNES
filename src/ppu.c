@@ -72,7 +72,9 @@ static uint8_t ppu_mem_read(PPU* ppu, uint16_t addr)
 
 		uint8_t a = (addr-0x3F00)%0x20;
 
-		/* Palette background mirroring */
+		/* Palette background mirroring.
+		   $3F04/$3F08/$3F0C can contain unique data, but
+		   $3F10/$3F14/$3F18/$3F1C mirror $3F00/$3F04/$3F08/$3F0C */
 		if (a > 15 && (a % 4) == 0)
 			a = 0;
 		return ppu->pram[a];
@@ -108,7 +110,9 @@ static void ppu_mem_write(PPU* ppu, uint16_t addr, uint8_t val)
 
 		uint8_t a = (addr-0x3F00)%0x20;
 
-		/* Palette background mirroring */
+		/* Palette background mirroring.
+		   $3F04/$3F08/$3F0C can contain unique data, but
+		   $3F10/$3F14/$3F18/$3F1C mirror $3F00/$3F04/$3F08/$3F0C */
 		if (a > 15 && (a % 4) == 0)
 			a = 0;
 		ppu->pram[a] = val;
@@ -751,7 +755,11 @@ void draw(PPU* ppu, RenderSurface screen)
 	uint8_t spr_pi = 0;
 	uint8_t si = 0;
 
-	uint32_t color = ppu->pram[ppu->bg_attr1*4 + pi];
+	/* Palette background mirroring. Although $3F04/$3F08/$3F0C (the
+	   background palettes' background color can contain unique data,
+	   only the universal background color is used during rendering. */
+	uint32_t color = (pi == 0) ? ppu_mem_read(ppu, 0x3F00) :
+		ppu_mem_read(ppu, 0x3F00 | (ppu->bg_attr1*4 + pi));
 	uint8_t i = 0;
 
 	ppu->bg_bmp1 <<= 1;
@@ -798,8 +806,8 @@ void draw(PPU* ppu, RenderSurface screen)
 	/* Sprite pixel is shown if the background pixel is transparent or the sprite
 	   has foreground priority. */
 	if (spr_pi != 0 && (pi == 0 || !(ppu->spr_attr[si] & 0x20)))
-		color = ppu->pram[16 + ((ppu->spr_attr[si]&3)*4) + spr_pi];
-
+		color = ppu_mem_read(ppu, 0x3F10 | ((ppu->spr_attr[si]&3)*4) + spr_pi);
+	
 	render_pixel(screen, ppu->cycle, ppu->scanline, palette[color]);
 
 
