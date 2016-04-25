@@ -771,6 +771,13 @@ void draw(PPU* ppu, RenderSurface screen)
 	ppu->bg_bmp1 <<= 1;
 	ppu->bg_bmp2 <<= 1;
 
+	/*if (ppu->x && (ppu->cycle % 8) > (7 - ppu->x))
+		color = ppu_mem_read(ppu, 0x3F00 | (ppu->bg_attr2*4 + pi));*/
+
+	/* Don't show tiles in left clipping region if enabled */
+	if (ppu->cycle < 8 && !(ppu->ppumask & 0x02))
+		pi = 0;
+
 	for (; i < 8; ++i)
 	{
 		/*if (ppu->spr_x[i] <= ppu->cycle)*/
@@ -793,8 +800,8 @@ void draw(PPU* ppu, RenderSurface screen)
 
 	/* Sprite 0 hit does not happen: 
 		[CHECK] If background or sprite rendering is disabled in PPUMASK ($2001)
-		At x=0 to x=7 if the left-side clipping window is enabled (if bit 2 or bit 1 of PPUMASK is 0).
-		At x=255, for an obscure reason related to the pixel pipeline.
+		[CHECK] At x=0 to x=7 if the left-side clipping window is enabled (if bit 2 or bit 1 of PPUMASK is 0).
+		[CHECK] At x=255, for an obscure reason related to the pixel pipeline.
 		[CHECK] At any pixel where the background or sprite pixel is transparent (2-bit color index from the CHR pattern is %00).
 		[CHECK] If sprite 0 hit has already occurred this frame. Bit 6 of PPUSTATUS ($2002) is cleared to 0 at dot 1 of the pre-render line. This means only the first sprite 0 hit in a frame can be detected.
  
@@ -805,17 +812,22 @@ void draw(PPU* ppu, RenderSurface screen)
 		The PAL PPU blanking on the left and right edges at x=0, x=1, and x=254 (see Overscan). */
 
 	/* TODO: better organize this */
-	if (BG_ENABLED(ppu) && spr_pi !=0 && pi != 0 && !memcmp(ppu->oam, ppu->soam+si, 4))
+	if (BG_ENABLED(ppu) && spr_pi !=0 && pi != 0 && !memcmp(ppu->oam, ppu->soam+si, 4) && (ppu->cycle > 7 || !(ppu->ppumask & 0x06)) && ppu->cycle != 255)
 		ppu->szero_hit = 1;
 
-
-	/* Sprite pixel is shown if the background pixel is transparent or the sprite
-	   has foreground priority. */
-	if (spr_pi != 0 && (pi == 0 || !(ppu->spr_attr[si] & 0x20)))
+	/* Sprite pixel is shown if not clipping the left 8 pixels and the background
+	   pixel is transparent or the sprite has foreground priority. */
+	if ((ppu->cycle > 7 || (ppu->ppumask & 0x04)) &&
+		spr_pi != 0 && (pi == 0 || !(ppu->spr_attr[si] & 0x20)))
+	{
 		color = ppu_mem_read(ppu, 0x3F10 | ((ppu->spr_attr[si]&3)*4) + spr_pi);
+	}
 
 	render_pixel(screen, ppu->cycle, ppu->scanline, palette[color]);
 
+	/* FOR TESTING */
+	if (ppu->cycle < 8 && !(ppu->ppumask & 0x02))
+		render_pixel(screen, ppu->cycle, ppu->scanline, palette[6]);
 
 	/*** Debug grid ***/
 	/*if (ppu->cycle % 8 == 0 || ppu->scanline % 8 == 0)
