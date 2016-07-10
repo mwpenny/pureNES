@@ -619,8 +619,8 @@ void bg_fetch_tile(PPU* ppu)
 			tile_bmap_hi = bg_get_tile_sliver(ppu, nt_byte, 1);
 			break;
 		case 0:		/* Move data from internal latches to shift registers */
-			ppu->bg_attr1 = ppu->bg_attr2;
-			ppu->bg_attr2 = attr_byte;
+			ppu->bg_attr1 = (ppu->bg_attr1 & 0xFF00) | ((attr_byte & 0x01) * 0xFF);
+			ppu->bg_attr2 = (ppu->bg_attr2 & 0xFF00) | (((attr_byte >> 1) & 0x01) * 0xFF);
 
 			ppu->bg_bmp1 = (ppu->bg_bmp1 & 0xFF00) | tile_bmap_low;
 			ppu->bg_bmp2 = (ppu->bg_bmp2 & 0xFF00) | tile_bmap_hi;
@@ -729,6 +729,7 @@ void draw(PPU* ppu, RenderSurface screen)
 {
 	uint8_t fxo = 15 - ppu->x; /* Fine X offset */
 	uint8_t pi = ((ppu->bg_bmp1 >> fxo) & 1) | ((ppu->bg_bmp2 >> (fxo-1)) & 2);
+	uint8_t p = ((ppu->bg_attr1 >> fxo) & 1) | ((ppu->bg_attr2 >> (fxo-1)) & 2);
 	uint8_t spr_pi = 0;
 	uint8_t si = 0;
 
@@ -737,8 +738,11 @@ void draw(PPU* ppu, RenderSurface screen)
 	   background palettes' background color) can contain unique data,
 	   only the universal background color is used during rendering. */
 	uint32_t color = (pi == 0) ? ppu_mem_read(ppu, 0x3F00) :
-		ppu_mem_read(ppu, 0x3F00 | (ppu->bg_attr1*4 + pi));
+		ppu_mem_read(ppu, 0x3F00 | (p*4 + pi));
 	uint8_t i = 0;
+
+	ppu->bg_attr1 <<= 1;
+	ppu->bg_attr2 <<= 1;
 
 	ppu->bg_bmp1 <<= 1;
 	ppu->bg_bmp2 <<= 1;
