@@ -64,6 +64,41 @@ typedef struct {
 
 	/* PPU memory */
 	uint8_t vram[2048];
+
+	/* Object attribute (sprite) memory
+		4 bytes/sprite
+
+		Byte 0:
+		76543210
+		||||||||
+		++++++++- Y position of sprite
+
+		Byte 1:
+			For 8x8 sprites:
+			76543210
+			||||||||
+			++++++++- Tile number of sprite within sprite pattern table
+
+			For 8x16 sprites:
+			76543210
+			||||||||
+			|||||||+- Bank ($0000 or $1000) of tiles
+			+++++++-- Tile number of top of sprite (0 to 254; bottom half is next tile)
+
+		Byte 2:
+		76543210
+		||||||||
+		||||||++- Palette (4 to 7) of sprite
+		|||+++--- Unimplemented
+		||+------ Priority (0: in front of background; 1: behind background)
+		|+------- Flip sprite horizontally
+		+-------- Flip sprite vertically
+
+		Byte 3:
+		76543210
+		||||||||
+		++++++++- X position of sprite
+	*/
 	uint8_t oam[256];
 	uint8_t pram[32];
 
@@ -71,10 +106,13 @@ typedef struct {
 	uint16_t cycle;
 
 	/* TODO: make everything below internal */
+	uint8_t spr_in_range, ovr_check_done, oamend;
+
 	uint8_t bg_attr1, bg_attr2;
 	uint16_t bg_bmp1, bg_bmp2;
 
 	uint8_t soam[32]; /* Secondary OAM */
+	uint8_t soam_idx;
 	uint8_t spr_attr[8];
 	uint8_t spr_x[8];
 	uint8_t spr_bmp1[8], spr_bmp2[8];

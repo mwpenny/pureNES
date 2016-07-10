@@ -490,7 +490,7 @@ static uint8_t bg_get_tile_palette(PPU* ppu)
 	   Use scroll values to isolate palette index for current tile's 2x2 tile region
 
 	   Shift right 2 every 4 X tiles (right 2x2 subregions in 4x4 tile regions).
-	   Shift right 4 every 4 Y tiles (bottom 2x2 subregions in 4x4 tile regions). */
+	   Shift right 4 every 2 Y tiles (bottom 2x2 subregions in 4x4 tile regions). */
 	return (ppu_mem_read(ppu, addr) >>
 			((ppu->v & 2) | ((ppu->v >> 4) & 4))) & 3;
 }
@@ -506,19 +506,6 @@ static uint8_t bg_get_tile_sliver(PPU* ppu, uint8_t tile, uint8_t hb)
 	return ppu_mem_read(ppu, BG_TBL(ppu) + tile*16 + fineY + hb*8);
 }
 
-static uint8_t reverse_bits(uint8_t x)
-{
-	/* TODO: more efficient way to do this? */
-	/*x = ((x & 0xF0) >> 4) | ((x & 0x0F) << 4); /* swap nibbles */
-	/*x = ((x & 0xCC) >> 2) | ((x & 0x33) << 2); /* swap bit pairs */
-	/*return ((x & 0xAA) >> 1) | ((x & 0x55) << 1); /* swap single bits */
-
-	return ((x >> 7) & 1) | ((x >> 5) & 2) |
-		   ((x >> 3) & 4) | ((x >> 1) & 8) |
-		   ((x << 1) & 16) | ((x << 3) & 32) |
-		   ((x << 5) & 64) | ((x << 7) & 128);
-}
-
 static uint8_t spr_get_tile_sliver(PPU* ppu, uint8_t si, uint8_t hb)
 {
 	/* Fetch byte of sprite tile bitmap row from pattern table */
@@ -527,7 +514,11 @@ static uint8_t spr_get_tile_sliver(PPU* ppu, uint8_t si, uint8_t hb)
 
 	   We're our own people, we can make our own data structures,
 	   with blackjack and hookers! */
-	uint16_t y = ppu->scanline - ppu->soam[si*4];
+
+	/* Sprites in secondary OAM have already been verified as being on the
+	   current scanline, therefore the difference between their Y coordinates
+	   and the current scanline number will not overflow an 8-bit integer */
+	uint8_t y = ppu->scanline - ppu->soam[si*4];
 	uint8_t attr = ppu->spr_attr[si];
 	uint8_t tile = ppu->soam[si*4+1];
 
@@ -542,14 +533,12 @@ static uint8_t spr_get_tile_sliver(PPU* ppu, uint8_t si, uint8_t hb)
 			y = 15 - y;
 
 		/* Tile bit 0 is used for pattern table select.
-
 		   Bits 1-7 are used for the top tile number. The
 		   bottom tile is the next one in the pattern table. */
 		addr = (tile&1)*0x1000;
-		tile = (tile & 0xFE) + (y/8);
-		y -= y & 8;
+		tile = (tile & 0xFE) + y/8;
+		y = y & 0xF7;	/* Y must be within the tile (< 8) */
 	}
-
 	/* 8x8 sprites */
 	else
 	{
@@ -558,12 +547,15 @@ static uint8_t spr_get_tile_sliver(PPU* ppu, uint8_t si, uint8_t hb)
 			y = 7 - y;
 		addr = SPR_TBL(ppu);
 	}
-
 	sliver = ppu_mem_read(ppu, addr + tile*16 + y + hb*8);
 
-	/* Horizontal flip */
+	/* Horizontal flip. Swap single bits, then bit pairs, then finally nibbles */
 	if (attr & 0x40)
-		return reverse_bits(sliver);
+	{
+		sliver = ((sliver & 0xAA) >> 1) | ((sliver & 0x55) << 1);
+		sliver = ((sliver & 0xCC) >> 2) | ((sliver & 0x33) << 2);
+		return (sliver >> 4) | (sliver << 4);
+	}
 	return sliver;
 }
 
@@ -641,90 +633,70 @@ void bg_fetch_tile(PPU* ppu)
 
 void find_sprites(PPU* ppu)
 {
-	/* TODO: FEWER NESTED IFs!! */
-
 	uint8_t spr_height = ((ppu->ppuctrl & 0x20) >> 5)*8 + 8;
-
-	static uint8_t si, oi, spr_found, ovr_check_done, oamend;
 
 	if (ppu->cycle == 0)
 	{
-		si = 0;
-		oi = 0;
-		spr_found = 0;
-		ovr_check_done = 0;
-		oamend = 0;
+		ppu->soam_idx = 0;
+		ppu->spr_in_range = 0;
+		ppu->ovr_check_done = 0;
+		ppu->oamend = 0;
 	}
-	else if ((ppu->cycle & 1) == 0)
+	else if (!(ppu->cycle & 1))
 	{
 		uint8_t oam_buf = oamdata_read(ppu);
 
 		/* Clear secondary OAM (reads will have returned $FF) */
 		if (ppu->cycle < 65)
 		{
-			ppu->soam[si] = oam_buf;
-			si = (si+1) & 31;
+			ppu->soam[ppu->soam_idx] = oam_buf;
+			ppu->soam_idx = (ppu->soam_idx+1) & 31;
 		}
-
-		/* Discover first 8 sprites on this scanline */
+		/* Discover first 8 sprites on the current scanline */
 		else if (ppu->cycle < 257)
 		{
 			uint8_t oamaddr_inc = 0;
-
-			/* Less than 8 sprites found */
-			if (!oamend && si < 32)
+			if (!ppu->oamend && !ppu->ovr_check_done)
 			{
-				/* Y-coord in range */
-				if (!spr_found && oam_buf < ppu->scanline+1 && oam_buf+spr_height > ppu->scanline)
-					spr_found = 1;
+				ppu->spr_in_range = ppu->spr_in_range || (oam_buf <= ppu->scanline &&
+														  oam_buf+spr_height > ppu->scanline);
 
-				if (spr_found)
+				/* Fewer than 8 sprites found */
+				if (ppu->soam_idx < 32)
+					ppu->soam[ppu->soam_idx] = oam_buf;
+				else
 				{
-					if ((si & 3) == 3)
-						spr_found = 0;
-					ppu->soam[si++] = oam_buf;
+					/* 2C02 hardware bug! Will result in OAMADDR being
+					   incremented by 5 if the sprite is not in range
+					   (should only be 4) */
+					oamaddr_inc = 1;
+					ppu->spr_overflow = ppu->spr_overflow || ppu->spr_in_range;
+				}
+
+				if (ppu->spr_in_range)
+				{
+					/* Reached last byte of this sprite. Stop incrementing soam_idx */
+					ppu->spr_in_range = ((ppu->soam_idx++ & 3) != 3);
 					oamaddr_inc = 1;
 				}
 				else
-					oamaddr_inc = 4;
+					oamaddr_inc += 4;
 			}
 
-			/* 8 sprites found. Do buggy overflow check for remaining sprites in OAM */
-			else if (!oamend && !ovr_check_done)
-			{
-				if (!ppu->spr_overflow && oam_buf < ppu->scanline+2 && oam_buf+spr_height > ppu->scanline)
-					ppu->spr_overflow = 1;
-
-				if (ppu->spr_overflow)
-				{
-					if ((oi++ & 3) == 3)
-						ovr_check_done = 1;
-					oamaddr_inc = 1;
-				}
-				/* 2C02 hardware bug! should only be incremented by 4 */
-				else
-					oamaddr_inc = 5;
-			}
-			else
-				oamaddr_inc = 4;
-
-			/* TODO: cleanup */
-			{uint16_t a = ppu->oam_addr + oamaddr_inc;
-			if (a > 255)
-				oamend = 1;
-			ppu->oam_addr = a & 0xFF;}
+			/* Check overflow */
+			ppu->oamend = ppu->oamend || (0xFF - ppu->oam_addr < oamaddr_inc);
+			ppu->oam_addr = (ppu->oam_addr + oamaddr_inc) & 0xFF;
 		}
 	}
 }
 
 void fetch_next_sprite(PPU* ppu)
 {
-	/* TODO: If there are less than 8 sprites on the next scanline,
+	/* TODO: If there are fewer than 8 sprites on the next scanline,
 			 then dummy fetches to tile $FF occur for the left-over sprites */
 
 	/* TODO: somehow combine with tile fetching logic */
 	uint8_t si = (ppu->cycle - 257)/8;
-	uint16_t y = ppu->scanline - ppu->soam[si*4];
 	static uint8_t ccount;
 
 	if (ppu->cycle == 257)
