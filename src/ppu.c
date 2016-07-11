@@ -75,6 +75,7 @@ static uint8_t ppu_mem_read(PPU* ppu, uint16_t addr)
 		/* Palette background mirroring.
 		   $3F04/$3F08/$3F0C can contain unique data, but
 		   $3F10/$3F14/$3F18/$3F1C mirror $3F00/$3F04/$3F08/$3F0C */
+		/* Necessary? */
 		if (a > 15 && (a % 4) == 0)
 			a = 0;
 
@@ -727,6 +728,8 @@ void fetch_next_sprite(PPU* ppu)
 
 void draw(PPU* ppu, RenderSurface screen)
 {
+	/*** THIS FUNCTION IS THE BOTTLENECK ***/
+
 	uint8_t fxo = 15 - ppu->x; /* Fine X offset */
 	uint8_t pi = ((ppu->bg_bmp1 >> fxo) & 1) | ((ppu->bg_bmp2 >> (fxo-1)) & 2);
 	uint8_t p = ((ppu->bg_attr1 >> fxo) & 1) | ((ppu->bg_attr2 >> (fxo-1)) & 2);
@@ -739,13 +742,8 @@ void draw(PPU* ppu, RenderSurface screen)
 	   only the universal background color is used during rendering. */
 	uint32_t color = (pi == 0) ? ppu_mem_read(ppu, 0x3F00) :
 		ppu_mem_read(ppu, 0x3F00 | (p*4 + pi));
+
 	uint8_t i = 0;
-
-	ppu->bg_attr1 <<= 1;
-	ppu->bg_attr2 <<= 1;
-
-	ppu->bg_bmp1 <<= 1;
-	ppu->bg_bmp2 <<= 1;
 
 	/*if (ppu->x && (ppu->cycle % 8) > (7 - ppu->x))
 		color = ppu_mem_read(ppu, 0x3F00 | (ppu->bg_attr2*4 + pi));*/
@@ -788,7 +786,7 @@ void draw(PPU* ppu, RenderSurface screen)
 		The PAL PPU blanking on the left and right edges at x=0, x=1, and x=254 (see Overscan). */
 
 	/* TODO: better organize this */
-	if (BG_ENABLED(ppu) && spr_pi !=0 && pi != 0 && !memcmp(ppu->oam, ppu->soam+si, 4) && (ppu->cycle > 7 || !(ppu->ppumask & 0x06)) && ppu->cycle != 255)
+	if (BG_ENABLED(ppu) && spr_pi != 0 && pi != 0 && !memcmp(ppu->oam, ppu->soam+si, 4) && (ppu->cycle > 7 || !(ppu->ppumask & 0x06)) && ppu->cycle != 255)
 		ppu->szero_hit = 1;
 
 	/* Sprite pixel is shown if not clipping the left 8 pixels and the background
@@ -834,7 +832,15 @@ void ppu_step(PPU* ppu, RenderSurface screen)
 			/* TODO: "garbage" NT fetches used by MMC5 */
 			/* TODO: have this function return a pixel value? */
 			if (CYC_RENDER(ppu->cycle) || CYC_PREFETCH(ppu->cycle))
+			{
+				ppu->bg_attr1 <<= 1;
+				ppu->bg_attr2 <<= 1;
+
+				ppu->bg_bmp1 <<= 1;
+				ppu->bg_bmp2 <<= 1;
+
 				bg_fetch_tile(ppu);
+			}
 
 			/* TODO: this still happens if rendering is disabled! */
 			if (SL_RENDER(ppu->scanline) && ppu->cycle < 257)
