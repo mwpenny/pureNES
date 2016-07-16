@@ -7,6 +7,7 @@
 #include "ppu.h"
 #include "controller.h"
 #include "game.h"
+#include "mapper.h"
 
 #include <SDL.h>
 

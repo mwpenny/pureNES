@@ -46,7 +46,7 @@ static uint8_t ppu_mem_read(PPU* ppu, uint16_t addr)
 {
 	/* Pattern tables ($0000-$1FFF) */
 	if (addr < 0x2000)
-		return ppu->nes->game.vrom[addr];
+		return ppu->nes->game.chr_bank[addr];
 	/* Namtables ($2000-$2FFF; $3F00-$3F1F mirror $2000-$2EFF) */
 	else if (addr < 0x3F00)
 	{
@@ -57,13 +57,17 @@ static uint8_t ppu_mem_read(PPU* ppu, uint16_t addr)
 		return ppu->vram[(addr & (0x3FF | (vm<<10))) + row*0x400*!vm];*/
 
 		/* Handle nametable mirroring */
-		if (GAME_VERT_MIRRORING((&ppu->nes->game)))
+		if (ppu->nes->game.mirror_mode == MIRRORING_VERTICAL)
 			return ppu->vram[addr & 0x7FF];
-		else
+		else if (ppu->nes->game.mirror_mode == MIRRORING_HORIZONTAL)
 		{
 			uint8_t row = (addr >> 11) & 1;
 			return ppu->vram[addr & 0x3FF | (row << 10)];
 		}
+		/*else
+		{
+			TODO: OTHER MIRRORINGS
+		}*/
 	}
 	/* Palettes ($3F00-$3F1F; mirrored at $3F20-$3FFF) */
 	else if (addr < 0x4000)
@@ -95,18 +99,22 @@ static void ppu_mem_write(PPU* ppu, uint16_t addr, uint8_t val)
 {
 	/* Pattern tables ($0000-$1FFF) */
 	if (addr < 0x2000)
-		ppu->nes->game.vrom[addr] = val;
+		ppu->nes->game.chr_bank[addr] = val;
 	/* Namtables ($2000-$2FFF; $3F00-$3F1F mirror $2000-$2EFF) */
 	else if (addr < 0x3F00)
 	{
 		/* Handle nametable mirroring */
-		if (GAME_VERT_MIRRORING((&ppu->nes->game)))
+		if (ppu->nes->game.mirror_mode == MIRRORING_VERTICAL)
 			ppu->vram[addr & 0x7FF] = val;
-		else
+		else if (ppu->nes->game.mirror_mode == MIRRORING_HORIZONTAL)
 		{
 			uint8_t row = (addr >> 11) & 1;
 			ppu->vram[addr & 0x3FF | (row << 10)] = val;
 		}
+		/*else
+		{
+			TODO: OTHER MIRRORINGS
+		}*/
 	}
 	/* Palettes ($3F00-$3F1F; mirrored at $3F20-$3FFF) */
 	else if (addr < 0x4000)
@@ -411,8 +419,8 @@ void render_nt(PPU* ppu, RenderSurface screen)
 			{
 				uint8_t bit = 7 - pixel;
 				uint8_t mask = 1 << bit;				
-				uint8_t lb = (ppu->nes->game.vrom[BG_TBL(ppu) + (ntb*16)+row] & mask) >> bit;
-				uint8_t hb = (ppu->nes->game.vrom[BG_TBL(ppu) + (ntb*16)+row+8] & mask) >> bit;
+				uint8_t lb = (ppu->nes->game.chr_bank[BG_TBL(ppu) + (ntb*16)+row] & mask) >> bit;
+				uint8_t hb = (ppu->nes->game.chr_bank[BG_TBL(ppu) + (ntb*16)+row+8] & mask) >> bit;
 
 				uint8_t color = lb | (hb << 1);
 			
@@ -445,8 +453,8 @@ void render_oam(PPU* ppu, RenderSurface screen)
 			{
 				uint8_t bit = 7 - pixel;
 				uint8_t mask = 1 << bit;				
-				uint8_t lb = (ppu->nes->game.vrom[SPR_TBL(ppu) + (ppu->oam[(i*4)+1]*16)+row] & mask) >> bit;
-				uint8_t hb = (ppu->nes->game.vrom[SPR_TBL(ppu) + (ppu->oam[(i*4)+1]*16)+row+8] & mask) >> bit;
+				uint8_t lb = (ppu->nes->game.chr_bank[SPR_TBL(ppu) + (ppu->oam[(i*4)+1]*16)+row] & mask) >> bit;
+				uint8_t hb = (ppu->nes->game.chr_bank[SPR_TBL(ppu) + (ppu->oam[(i*4)+1]*16)+row+8] & mask) >> bit;
 
 				uint8_t color = lb | (hb << 1);
 			
