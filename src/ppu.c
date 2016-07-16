@@ -45,8 +45,10 @@ static uint32_t palette[64] =
 static uint8_t ppu_mem_read(PPU* ppu, uint16_t addr)
 {
 	/* Pattern tables ($0000-$1FFF) */
-	if (addr < 0x2000)
-		return ppu->nes->game.chr_bank[addr];
+	if (addr < 0x1000)
+		return ppu->nes->game.chr_bank1[addr];
+	else if (addr < 0x2000)
+		return ppu->nes->game.chr_bank2[addr - 0x1000];
 	/* Namtables ($2000-$2FFF; $3F00-$3F1F mirror $2000-$2EFF) */
 	else if (addr < 0x3F00)
 	{
@@ -88,18 +90,17 @@ static uint8_t ppu_mem_read(PPU* ppu, uint16_t addr)
 			return ppu->pram[a] & 0x30;
 		return ppu->pram[a];
 	}
-	else
-	{
-		/* Out of bounds. Oh shit... */
-		return 0;
-	}
+	/* Out of bounds. Oh shit... */
+	return 0;
 }
 
 static void ppu_mem_write(PPU* ppu, uint16_t addr, uint8_t val)
 {
 	/* Pattern tables ($0000-$1FFF) */
 	if (addr < 0x2000)
-		ppu->nes->game.chr_bank[addr] = val;
+		ppu->nes->game.chr_bank1[addr] = val;
+	else if (addr < 0x2000)
+		ppu->nes->game.chr_bank2[addr - 0x1000] = val;
 	/* Namtables ($2000-$2FFF; $3F00-$3F1F mirror $2000-$2EFF) */
 	else if (addr < 0x3F00)
 	{
@@ -419,8 +420,8 @@ void render_nt(PPU* ppu, RenderSurface screen)
 			{
 				uint8_t bit = 7 - pixel;
 				uint8_t mask = 1 << bit;				
-				uint8_t lb = (ppu->nes->game.chr_bank[BG_TBL(ppu) + (ntb*16)+row] & mask) >> bit;
-				uint8_t hb = (ppu->nes->game.chr_bank[BG_TBL(ppu) + (ntb*16)+row+8] & mask) >> bit;
+				uint8_t lb = (ppu_mem_read(ppu, BG_TBL(ppu) + (ntb*16)+row) & mask) >> bit;
+				uint8_t hb = (ppu_mem_read(ppu, BG_TBL(ppu) + (ntb*16)+row+8) & mask) >> bit;
 
 				uint8_t color = lb | (hb << 1);
 			
@@ -453,8 +454,8 @@ void render_oam(PPU* ppu, RenderSurface screen)
 			{
 				uint8_t bit = 7 - pixel;
 				uint8_t mask = 1 << bit;				
-				uint8_t lb = (ppu->nes->game.chr_bank[SPR_TBL(ppu) + (ppu->oam[(i*4)+1]*16)+row] & mask) >> bit;
-				uint8_t hb = (ppu->nes->game.chr_bank[SPR_TBL(ppu) + (ppu->oam[(i*4)+1]*16)+row+8] & mask) >> bit;
+				uint8_t lb = (ppu_mem_read(ppu, SPR_TBL(ppu) + (ppu->oam[(i*4)+1]*16)+row) & mask) >> bit;
+				uint8_t hb = (ppu_mem_read(ppu, SPR_TBL(ppu) + (ppu->oam[(i*4)+1]*16)+row+8) & mask) >> bit;
 
 				uint8_t color = lb | (hb << 1);
 			

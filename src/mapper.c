@@ -5,10 +5,11 @@
 
 /* TODO: better way to register/discover mappers? */
 extern Mapper mapper_nrom;
+extern Mapper mapper_uxrom;
 
 static Mapper *mappers[256] = 
 {
-	&mapper_nrom, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+	&mapper_nrom, NULL, &mapper_uxrom, NULL, NULL, NULL, NULL, NULL,
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,

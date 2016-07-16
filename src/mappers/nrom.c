@@ -12,7 +12,10 @@ static void init(Game* game)
 	else
 		game->prg_bank2 = game->prg_mem + 0x4000;
 
-	game->chr_bank = game->chr_mem;
+	game->chr_bank1 = game->chr_mem;
+	game->chr_bank2 = game->chr_mem + 0x1000;
 }
 
-Mapper mapper_nrom = {init};
+static void write(Game* game, uint16_t addr, uint8_t val) {};
+
+Mapper mapper_nrom = {init, write};

@@ -67,18 +67,21 @@ static void game_parse_header(Game* g, FILE* rom)
 
 	g->has_nvram = (flags1 & 0x02);
 	g->has_trainer = (flags1 & 0x04);
-	mapper_num = (flags1 & 0xF0) >> 8;
+	mapper_num = (flags1 & 0xF0) >> 4;
 
 	g->is_vs_game = (flags2 & 0x01);
 	/* if (flags2 & 0x0E) {
 		ERROR (reserved bits)
 	} */
 	mapper_num |= (flags2 & 0xF0);
+
+	/* TODO: look into "DiskDude!" headers (messes up mapper number detection) */
 	g->mapper = mapper_get(mapper_num);
-	/*if (!g->mapper)
+	if (!g->mapper)
 	{
-		ERROR: unsupported
-	}*/
+		printf("Unsupported mapper (%d)\n", mapper_num);
+		exit(1);
+	}
 }
 
 void game_load(Game* g, char* path)
@@ -97,9 +100,14 @@ void game_load(Game* g, char* path)
 	g->prg_mem = (uint8_t*)malloc(prg_size);
 	fread(g->prg_mem, 1, prg_size, rom);
 
-	/* TODO: check this succeeds */
-	g->chr_mem = (uint8_t*)malloc(chr_size);
-	fread(g->chr_mem, 1, chr_size, rom);
+	/* Using CHR RAM */
+	if (chr_size == 0)
+		g->chr_mem = (uint8_t*)malloc(0x2000);
+	else
+	{
+		g->chr_mem = (uint8_t*)malloc(chr_size);
+		fread(g->chr_mem, 1, chr_size, rom);
+	}
 
 	fclose(rom);
 	g->mapper->init(g);

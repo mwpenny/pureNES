@@ -29,7 +29,8 @@ typedef struct
 	Mapper* mapper;
 
 	uint8_t *prg_mem, *chr_mem;
-	uint8_t *prg_bank1, *prg_bank2, *chr_bank;
+	uint8_t *prg_bank1, *prg_bank2;
+	uint8_t *chr_bank1, *chr_bank2;
 } Game;
 
 void game_load(Game* g, char* path);
