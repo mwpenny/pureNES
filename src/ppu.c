@@ -172,17 +172,19 @@ static uint8_t ppustatus_read(PPU* ppu)
 /* Handles writes to $2003 (OAM address port) */
 static void oamaddr_write(PPU* ppu, uint8_t val)
 {
-	ppu->oam_addr = val;
+	ppu->oamaddr = val;
 }
 
 /* Handles reads from $2004 (OAM data port) */
 static uint8_t oamdata_read(PPU* ppu)
 {
+	/* TODO: under certain conditions, the contents of soam are returned */
+
 	/* Attempting to read during rendering returns $FF (a signal
 	   is active that makes the read always return $FF) */
 	if (ppu->scanline < 240 && ppu->cycle > 0 && ppu->cycle < 65)
 		return 0xFF;
-	return ppu->oam[ppu->oam_addr];
+	return ppu->oam[ppu->oamaddr & 0xFF];
 }
 
 /* Handles writes to $2004 (OAM data port) */
@@ -205,9 +207,9 @@ static void oamdata_write(PPU* ppu, uint8_t val)
 	   the first 20 scanlines after the 2C07 signals vertical blanking. */
 
 	/* Zero out unused bits in attribute byte */
-	if ((ppu->oam_addr & 3) == 2)
+	if ((ppu->oamaddr & 3) == 2)
 		val &= 0xE3;
-	ppu->oam[ppu->oam_addr++] = val;
+	ppu->oam[ppu->oamaddr++] = val;
 }
 
 /* Handles writes to $2005 (PPU scrolling position register) */
@@ -685,8 +687,8 @@ void find_sprites(PPU* ppu)
 			}
 
 			/* Check overflow */
-			ppu->oamend = ppu->oamend || (0xFF - ppu->oam_addr < oamaddr_inc);
-			ppu->oam_addr = (ppu->oam_addr + oamaddr_inc) & 0xFF;
+			ppu->oamend = ppu->oamend || (0xFF - ppu->oamaddr < oamaddr_inc);
+			ppu->oamaddr = (ppu->oamaddr + oamaddr_inc) & 0xFF;
 		}
 	}
 }
@@ -723,44 +725,29 @@ void fetch_next_sprite(PPU* ppu)
 	}
 
 	++ccount;
-	ppu->oam_addr = 0;
+	ppu->oamaddr = 0;
 }
 
 void draw(PPU* ppu, RenderSurface screen)
 {
-	/*** THIS FUNCTION IS THE BOTTLENECK ***/
-
 	uint8_t fxo = 15 - ppu->x; /* Fine X offset */
-	uint8_t pi = ((ppu->bg_bmp1 >> fxo) & 1) | ((ppu->bg_bmp2 >> (fxo-1)) & 2);
-	uint8_t p = ((ppu->bg_attr1 >> fxo) & 1) | ((ppu->bg_attr2 >> (fxo-1)) & 2);
+	uint8_t bg_pi = 0;
 	uint8_t spr_pi = 0;
 	uint8_t si = 0;
-
-	/* TODO: look into background palette hack */
-	/* Palette background mirroring. Although $3F04/$3F08/$3F0C (the
-	   background palettes' background color) can contain unique data,
-	   only the universal background color is used during rendering. */
-	uint32_t color = (pi == 0) ? ppu_mem_read(ppu, 0x3F00) :
-		ppu_mem_read(ppu, 0x3F00 | (p*4 + pi));
+	uint32_t px_color = 0;
 
 	uint8_t i = 0;
-
-	/*if (ppu->x && (ppu->cycle % 8) > (7 - ppu->x))
-		color = ppu_mem_read(ppu, 0x3F00 | (ppu->bg_attr2*4 + pi));*/
-
-	/* Don't show tiles in left clipping region if enabled */
-	if (ppu->cycle < 8 && !(ppu->ppumask & 0x02))
-		pi = 0;
-
 	for (; i < 8; ++i)
 	{
-		/*if (ppu->spr_x[i] <= ppu->cycle)*/
+		/*if (ppu->cycle >= ppu->spr_x[i])*/
 		if (ppu->spr_x[i] == 0)
 		{
 			/* TODO: shouldn't this go after? */
+			/* TODO: decrementing logic starts at cycle 1 */
 
-			/* First non-transparent pixel moves on to multiplexer */
-			if (spr_pi == 0)
+			/* First non-transparent pixel moves on to multiplexer
+			   (unless using clipping window) */
+			if (spr_pi == 0 && (ppu->cycle > 7 || (ppu->ppumask & 0x04)))
 			{
 				spr_pi = ((ppu->spr_bmp1[i] >> 7) & 1) | ((ppu->spr_bmp2[i] >> 6) & 2);
 				si = i;
@@ -772,46 +759,31 @@ void draw(PPU* ppu, RenderSurface screen)
 			--ppu->spr_x[i];
 	}
 
-	/* Sprite 0 hit does not happen: 
-		[CHECK] If background or sprite rendering is disabled in PPUMASK ($2001)
-		[CHECK] At x=0 to x=7 if the left-side clipping window is enabled (if bit 2 or bit 1 of PPUMASK is 0).
-		[CHECK] At x=255, for an obscure reason related to the pixel pipeline.
-		[CHECK] At any pixel where the background or sprite pixel is transparent (2-bit color index from the CHR pattern is %00).
-		[CHECK] If sprite 0 hit has already occurred this frame. Bit 6 of PPUSTATUS ($2002) is cleared to 0 at dot 1 of the pre-render line. This means only the first sprite 0 hit in a frame can be detected.
- 
-	   Sprite 0 hit happens regardless of the following: 
-		[CHECK] Sprite priority. Sprite 0 can still hit the background from behind.
-		[CHECK] The pixel colors. Only the CHR pattern bits are relevant, not the actual rendered colors, and any CHR color index except %00 is considered opaque.
-		[CHECK] The palette. The contents of the palette are irrelevant to sprite 0 hits. For example: a black ($0F) sprite pixel can hit a black ($0F) background as long as neither is the transparent color index %00.
-		The PAL PPU blanking on the left and right edges at x=0, x=1, and x=254 (see Overscan). */
+	/* Only background color will be shown if using clipping window */
+	if (ppu->cycle > 7 || (ppu->ppumask & 0x02))
+		bg_pi = ((ppu->bg_bmp1 >> fxo) & 1) | ((ppu->bg_bmp2 >> (fxo-1)) & 2);
 
-	/* TODO: better organize this */
-	if (BG_ENABLED(ppu) && spr_pi != 0 && pi != 0 && !memcmp(ppu->oam, ppu->soam+si, 4) && (ppu->cycle > 7 || !(ppu->ppumask & 0x06)) && ppu->cycle != 255)
-		ppu->szero_hit = 1;
-
-	/* Sprite pixel is shown if not clipping the left 8 pixels and the background
-	   pixel is transparent or the sprite has foreground priority. */
-	if ((ppu->cycle > 7 || (ppu->ppumask & 0x04)) &&
-		spr_pi != 0 && (pi == 0 || !(ppu->spr_attr[si] & 0x20)))
+	/* BG tile pixel is shown if no overlapping sprite or if overlapping sprite
+	   doesn't have priority */
+	if (spr_pi == 0 || (bg_pi != 0 && (ppu->spr_attr[si] & 0x20)))
 	{
-		color = ppu_mem_read(ppu, 0x3F10 | ((ppu->spr_attr[si]&3)*4) + spr_pi);
+		uint8_t p = ((ppu->bg_attr1 >> fxo) & 1) | ((ppu->bg_attr2 >> (fxo-1)) & 2);
+		/* TODO: look into background palette hack */
+		/* Palette background mirroring. Although $3F04/$3F08/$3F0C (the
+		   background palettes' background color) can contain unique data,
+		   only the universal background color is used during rendering. */
+		px_color = (bg_pi == 0) ? ppu_mem_read(ppu, 0x3F00) :
+			ppu_mem_read(ppu, 0x3F00 | (p*4 + bg_pi));
 	}
+	else
+		px_color = ppu_mem_read(ppu, 0x3F10 | ((ppu->spr_attr[si]&3)*4) + spr_pi);
 
-	render_pixel(screen, ppu->cycle, ppu->scanline, palette[color]);
-
-	/* FOR TESTING */
-	if (ppu->cycle < 8 && !(ppu->ppumask & 0x02))
-		render_pixel(screen, ppu->cycle, ppu->scanline, palette[6]);
-
-	/*** Debug grid ***/
-	/*if (ppu->cycle % 8 == 0 || ppu->scanline % 8 == 0)
-		render_pixel(screen, ppu->cycle, ppu->scanline, palette[16]);
-
-	if (ppu->cycle % 16 == 0 || ppu->scanline % 16 == 0)
-		render_pixel(screen, ppu->cycle, ppu->scanline, palette[18]);
-
-	if (ppu->cycle % 32 == 0 || ppu->scanline % 32 == 0)
-		render_pixel(screen, ppu->cycle, ppu->scanline, palette[6]);*/
+	/* TODO: check sprite is actually sprite 0 */
+	ppu->szero_hit = ppu->szero_hit ||
+					 (memcmp(ppu->oam, ppu->soam+si, 4) == 0 &&
+					  ((ppu->ppumask & 0x18) == 0x18) &&
+					  bg_pi != 0 && spr_pi != 0);
+	render_pixel(screen, ppu->cycle, ppu->scanline, palette[px_color]);
 }
 
 #define SL_RENDER(sl) (sl < 240)

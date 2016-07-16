@@ -59,7 +59,7 @@ typedef struct {
 	uint8_t szero_hit;
 	uint8_t vblank_started;
 
-	uint8_t oam_addr;
+	uint8_t oamaddr;
 	uint8_t data_buf;	/* For buffered reads from PPUDATA ($2007) */
 
 	/* PPU memory */
@@ -113,6 +113,7 @@ typedef struct {
 
 	uint8_t soam[32]; /* Secondary OAM */
 	uint8_t soam_idx;
+
 	uint8_t spr_attr[8];
 	uint8_t spr_x[8];
 	uint8_t spr_bmp1[8], spr_bmp2[8];
