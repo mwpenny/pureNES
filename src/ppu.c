@@ -823,7 +823,9 @@ void ppu_step(PPU* ppu, RenderSurface screen)
 				bg_fetch_tile(ppu);
 			}
 
-			/* TODO: this still happens if rendering is disabled! */
+			/* TODO: this still happens if rendering is disabled!
+			   (fixing this will probably cause incorrect sprite overflow behavior
+			   (it shouldn't happen when rendering is disabled)) */
 			if (SL_RENDER(ppu->scanline) && ppu->cycle < 257)
 				find_sprites(ppu);
 

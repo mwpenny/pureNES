@@ -22,7 +22,7 @@ void nes_load_rom(NES* nes, char* path)
 	game_load(&nes->game, path);
 
 	/* Reset (start) system */
-	cpu_interrupt(&nes->cpu, INT_RST);
+	cpu_interrupt(&nes->cpu, INT_RESET);
 }
 
 void nes_update(NES* nes, SDL_Surface* screen)
