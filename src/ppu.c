@@ -83,7 +83,7 @@ static uint8_t ppu_mem_read(PPU* ppu, uint16_t addr)
 		   $3F10/$3F14/$3F18/$3F1C mirror $3F00/$3F04/$3F08/$3F0C */
 		/* Necessary? */
 		if (a > 15 && (a % 4) == 0)
-			a = 0;
+			a -= 0x10;
 
 		/* Grayscale */
 		if (ppu->ppumask & 1)
@@ -128,7 +128,7 @@ static void ppu_mem_write(PPU* ppu, uint16_t addr, uint8_t val)
 		   $3F04/$3F08/$3F0C can contain unique data, but
 		   $3F10/$3F14/$3F18/$3F1C mirror $3F00/$3F04/$3F08/$3F0C */
 		if (a > 15 && (a % 4) == 0)
-			a = 0;
+			a -= 0x10;
 		ppu->pram[a] = val;
 	}
 	else
@@ -860,6 +860,7 @@ void ppu_step(PPU* ppu, RenderSurface screen)
 	{
 		/*render_oam(ppu, screen);*/
 		/*render_nt(ppu, screen);*/
+		/*render_palettes(ppu, screen);*/
 		renderer_flip_surface(screen);
 		ppu->vblank_started = 1;
 		if (NMI_ENABLED(ppu))
