@@ -48,6 +48,7 @@ typedef struct
 } CPU;
 
 void cpu_init(CPU* cpu, struct NES* nes);
+void cpu_power(CPU* cpu);
 void cpu_reset(CPU* cpu);
 int cpu_step(CPU* cpu);
 void cpu_interrupt(CPU* cpu, uint8_t type);

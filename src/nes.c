@@ -21,8 +21,8 @@ void nes_load_rom(NES* nes, char* path)
 {
 	game_load(&nes->game, path);
 
-	/* Reset (start) system */
-	cpu_reset(&nes->cpu);
+	/* Start system */
+	cpu_power(&nes->cpu);
 }
 
 void nes_update(NES* nes, SDL_Surface* screen)

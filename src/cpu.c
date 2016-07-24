@@ -836,14 +836,21 @@ void cpu_init(CPU* cpu, NES* nes)
 
 void cpu_reset(CPU* cpu)
 {
-	cpu->p = FLAG_U | FLAG_I;
-	cpu->a = cpu->x = cpu->y = 0;
-	cpu->sp = 0xFD;
+	cpu->sp -= 3;
+	cpu->p |= FLAG_I;
 	cpu->pc = memory_get16(cpu->nes, ADDR_RESET);
 	cpu->is_running = 1;
-
-	/* TODO: init memory */
 	/* after reset, APU is silenced */
+}
+
+void cpu_power(CPU* cpu)
+{
+	cpu->p = FLAG_U;
+	cpu->a = cpu->x = cpu->y = 0;
+	cpu->sp = 0;
+	cpu_reset(cpu);
+
+	/* TODO: init memory? */
 }
 
 static void handle_interrupt(CPU* cpu, InterruptType type)
