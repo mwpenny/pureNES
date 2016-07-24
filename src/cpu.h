@@ -10,10 +10,9 @@ typedef enum {
 	INT_RESET,
 	INT_NMI,
 	INT_IRQ
-} Interrupt;
+} InterruptType;
 
 typedef enum {
-	AMODE_NONE,
 	AMODE_ACC,
 	AMODE_IMP,
 	AMODE_IMM,
@@ -31,28 +30,22 @@ typedef enum {
 
 typedef struct
 {
-	struct NES* nes;	/* the system the CPU is connected to */
+	struct NES* nes;
 
-	Interrupt interrupt;	/* last interrupt received */
-	uint16_t pc;			/* program counter */
-	uint8_t sp;				/* stack pointer */
-	uint8_t p;				/* processor flags */
-	uint8_t a, x, y;		/* other registers */
+	uint16_t pc;
+	uint8_t sp;
+	uint8_t p;
+	uint8_t a, x, y;
 
+	uint8_t is_running;
+	InterruptType last_int;
 	uint8_t opcode;
-	AddressingMode instruction_amode;
-	uint16_t oc_addr;
+	AddressingMode instr_amode;
+	uint16_t eff_addr;
 
 	int cycles, dma_cycles;
 	uint8_t oddcycle;
 } CPU;
-
-/*typedef struct
-{
-	AddressingMode amode;
-	uint8_t opcode;
-	uint16_t operand;
-} OCInfo;*/
 
 void cpu_init(CPU* cpu, struct NES* nes);
 void cpu_reset(CPU* cpu);

@@ -22,13 +22,18 @@ void nes_load_rom(NES* nes, char* path)
 	game_load(&nes->game, path);
 
 	/* Reset (start) system */
-	cpu_interrupt(&nes->cpu, INT_RESET);
+	cpu_reset(&nes->cpu);
 }
 
 void nes_update(NES* nes, SDL_Surface* screen)
 {
-	int cycles = cpu_step(&nes->cpu), i = 0;
-	for (; i < cycles*3; ++i)
+	int ppu_cycles, i = 0;
+	if (nes->cpu.is_running)
+		ppu_cycles = cpu_step(&nes->cpu)*3;
+	else
+		ppu_cycles = 1;
+
+	for (; i < ppu_cycles; ++i)
 		ppu_step(&nes->ppu, screen);
 		/*ppu_render_pattern_table(&nes->ppu, screen);*/
 		/*ppu_render_nametable(&nes->ppu, screen);*/

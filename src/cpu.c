@@ -9,7 +9,23 @@
 #define ADDR_RESET 0xFFFC
 #define ADDR_IRQ 0xFFFE
 
-/* P flag bitmasks */
+/* P flag register bitmasks */
+/* 7  bit  0
+   ---- ----
+   NVUB DIZC
+   |||| ||||
+   |||| |||+- Carry: 1 if last addition or shift resulted in a carry, or if
+   |||| |||     last subtraction resulted in no borrow
+   |||| ||+-- Zero: 1 if last operation resulted in a 0 value
+   |||| |+--- Interrupt: Interrupt inhibit
+   |||| |       (0: /IRQ and /NMI get through; 1: only /NMI gets through)
+   |||| +---- Decimal: 1 to make ADC and SBC use binary-coded decimal arithmetic
+   ||||         (ignored on second-source 6502 like that in the NES)
+   |||+------ Break: Doesn't exist in hardware. 1 when using PHP/BRK (software interrupt)
+   ||+------- Unused: Always 1
+   |+-------- Overflow: 1 if last ADC or SBC resulted in signed overflow,
+   |            or D6 from last BIT
+   +--------- Negative: Set to bit 7 of the last operation */
 #define FLAG_C 0x01
 #define FLAG_Z 0x02
 #define FLAG_I 0x04
@@ -19,11 +35,9 @@
 #define FLAG_V 0x40
 #define FLAG_N 0x80
 
-
-/*** CPU instructions ***/
-static void update_flags(CPU* cpu, int16_t val)
+static void update_flags(CPU* cpu, uint8_t val)
 {
-	/* Set/clear zero and negative flags */
+	/* Set/clear zero and negative flags based on result of last operation */
 	if (val)
 		cpu->p &= ~FLAG_Z;
 	else
@@ -35,7 +49,30 @@ static void update_flags(CPU* cpu, int16_t val)
 		cpu->p &= ~FLAG_N;
 }
 
-/*** Status flag changes ***/
+static void stack_push(CPU* cpu, uint8_t val)
+{
+	memory_set(cpu->nes, 0x100 | cpu->sp--, val);
+}
+
+static void stack_push16(CPU* cpu, uint16_t val)
+{
+	stack_push(cpu, (uint8_t)(val >> 8));
+	stack_push(cpu, (uint8_t)(val & 0xFF));
+}
+
+static uint8_t stack_pop(CPU* cpu)
+{
+	return memory_get(cpu->nes, 0x100 | ++cpu->sp);
+}
+
+static uint16_t stack_pop16(CPU* cpu)
+{
+	return stack_pop(cpu) | (stack_pop(cpu) << 8);
+}
+
+/*** CPU instructions ***/
+
+/** Status flag changes **/
 /* CLC - clear carry flag */
 static void clc(CPU* cpu)
 {
@@ -78,84 +115,84 @@ static void sei(CPU* cpu)
 	cpu->p |= FLAG_I;
 }
 
-/*** Load/store operations ***/
+/** Load/store operations **/
 /* LDA - load accumulator */
 static void lda(CPU* cpu)
 {
-	cpu->a = memory_get(cpu->nes, cpu->oc_addr);
+	cpu->a = memory_get(cpu->nes, cpu->eff_addr);
 	update_flags(cpu, cpu->a);
 }
 
-/* LDX - load x register */
+/* LDX - load X register */
 static void ldx(CPU* cpu)
 {
-	cpu->x = memory_get(cpu->nes, cpu->oc_addr);
+	cpu->x = memory_get(cpu->nes, cpu->eff_addr);
 	update_flags(cpu, cpu->x);
 }
 
-/* LDY - load y register */
+/* LDY - load Y register */
 static void ldy(CPU* cpu)
 {
-	cpu->y = memory_get(cpu->nes, cpu->oc_addr);
+	cpu->y = memory_get(cpu->nes, cpu->eff_addr);
 	update_flags(cpu, cpu->y);
 }
 
 /* STA - store accumulator */
 static void sta(CPU* cpu)
 {
-	memory_set(cpu->nes, cpu->oc_addr, cpu->a);
+	memory_set(cpu->nes, cpu->eff_addr, cpu->a);
 }
 
-/* STX - store x register */
+/* STX - store X register */
 static void stx(CPU* cpu)
 {
-	memory_set(cpu->nes, cpu->oc_addr, cpu->x);
+	memory_set(cpu->nes, cpu->eff_addr, cpu->x);
 }
 
-/* STY - store y register */
+/* STY - store Y register */
 static void sty(CPU* cpu)
 {
-	memory_set(cpu->nes, cpu->oc_addr, cpu->y);
+	memory_set(cpu->nes, cpu->eff_addr, cpu->y);
 }
 
-/*** Register transfers ***/
-/* TAX - transfer accumulator to x */
+/** Register transfers **/
+/* TAX - transfer accumulator to X */
 static void tax(CPU* cpu)
 {
 	cpu->x = cpu->a;
 	update_flags(cpu, cpu->x);
 }
 
-/* TAY - transfer accumulator to y */
+/* TAY - transfer accumulator to Y */
 static void tay(CPU* cpu)
 {
 	cpu->y = cpu->a;
 	update_flags(cpu, cpu->y);
 }
 
-/* TXA - transfer x to accumulator */
+/* TXA - transfer X to accumulator */
 static void txa(CPU* cpu)
 {
 	cpu->a = cpu->x;
 	update_flags(cpu, cpu->a);
 }
 
-/* TYA - transfer y to accumulator */
+/* TYA - transfer Y to accumulator */
 static void tya(CPU* cpu)
 {
 	cpu->a = cpu->y;
 	update_flags(cpu, cpu->a);
 }
 
-/*** Stack operations ***/
-/* TSX - transfer stack pointer to x */
+/** Stack operations **/
+/* TSX - transfer stack pointer to X */
 static void tsx(CPU* cpu)
 {
 	cpu->x = cpu->sp;
 	update_flags(cpu, cpu->x);
 }
 
-/* TXS - transfer x to stack pointer */
+/* TXS - transfer X to stack pointer */
 static void txs(CPU* cpu)
 {
 	cpu->sp = cpu->x;
@@ -164,20 +201,20 @@ static void txs(CPU* cpu)
 /* PHA - push accumulator on stack */
 static void pha(CPU* cpu)
 {
-	memory_set(cpu->nes, 0x100 | cpu->sp--, cpu->a);	
+	stack_push(cpu, cpu->a);
 }
 
 /* PHP - push processor status on stack */
 static void php(CPU* cpu)
 {
 	/* B flag set on PHP/BRK (software interrupts) */
-	memory_set(cpu->nes, 0x100 | cpu->sp--, cpu->p | FLAG_B | FLAG_U);
+	stack_push(cpu, cpu->p | FLAG_B | FLAG_U);
 }
 
 /* PLA - pull accumulator from stack */
 static void pla(CPU* cpu)
 {
-	cpu->a = memory_get(cpu->nes, 0x100 | ++cpu->sp);
+	cpu->a = stack_pop(cpu);
 	update_flags(cpu, cpu->a);
 }
 
@@ -185,35 +222,35 @@ static void pla(CPU* cpu)
 static void plp(CPU* cpu)
 {
 	/* B flag doesn't exist in hardware. Don't save to register */
-	cpu->p = memory_get(cpu->nes, 0x100 | ++cpu->sp) & ~FLAG_B;
+	cpu->p = stack_pop(cpu) & ~FLAG_B;
 }
 
-/*** Logical operations ***/
+/** Logical operations **/
 /* AND - logical AND with accumulator */
 static void and(CPU* cpu)
 {
-	cpu->a &= memory_get(cpu->nes, cpu->oc_addr);
+	cpu->a &= memory_get(cpu->nes, cpu->eff_addr);
 	update_flags(cpu, cpu->a);
 }
 
 /* EOR - exclusive OR with accumulator */
 static void eor(CPU* cpu)
 {
-	cpu->a ^= memory_get(cpu->nes, cpu->oc_addr);
+	cpu->a ^= memory_get(cpu->nes, cpu->eff_addr);
 	update_flags(cpu, cpu->a);
 }
 
 /* ORA - inclusive OR with accumulator */
 static void ora(CPU* cpu)
 {
-	cpu->a |= memory_get(cpu->nes, cpu->oc_addr);
+	cpu->a |= memory_get(cpu->nes, cpu->eff_addr);
 	update_flags(cpu, cpu->a);
 }
 
 /* BIT - bit test with mask pattern in accumulator */
 static void bit(CPU* cpu)
 {
-	uint8_t num = memory_get(cpu->nes, cpu->oc_addr);
+	uint8_t num = memory_get(cpu->nes, cpu->eff_addr);
 
 	/* Clear zero flag if register A has a mask bit set */
 	if (cpu->a & num)
@@ -222,25 +259,24 @@ static void bit(CPU* cpu)
 		cpu->p |= FLAG_Z;
 
 	/* Copy N and V bits from the memory location */
-	cpu->p &= ~(FLAG_N | FLAG_V);
-	cpu->p |= (num & (FLAG_N | FLAG_V));
+	cpu->p = (cpu->p & ~FLAG_N & ~FLAG_V) | (num & (FLAG_N | FLAG_V));
 }
 
-/*** Arithmetic operations ***/
+/** Arithmetic operations **/
 /* Addition helper function. Works with a number directly */
 static void do_add(CPU* cpu, uint8_t num)
 {
 	int16_t val = cpu->a + num + (cpu->p & FLAG_C);
 	if (val > 0xFF)
-		sec(cpu);
+		cpu->p |= FLAG_C;
 	else
-		clc(cpu);
+		cpu->p &= ~FLAG_C;
 
 	/* Sum of 2 numbers with same sign has different sign => overflow */
 	if ((~(cpu->a ^ num) & (cpu->a ^ val)) & 0x80)
 		cpu->p |= FLAG_V;
 	else
-		clv(cpu);
+		cpu->p &= ~FLAG_V;
 
 	cpu->a = (uint8_t)val;
 	update_flags(cpu, cpu->a);
@@ -249,7 +285,7 @@ static void do_add(CPU* cpu, uint8_t num)
 /* ADC - add with carry to accumulator */
 static void adc(CPU* cpu)
 {
-	uint8_t num = memory_get(cpu->nes, cpu->oc_addr);
+	uint8_t num = memory_get(cpu->nes, cpu->eff_addr);
 	do_add(cpu, num);
 }
 
@@ -257,18 +293,17 @@ static void adc(CPU* cpu)
 static void sbc(CPU* cpu)
 {
 	/* -num - 1 */
-	uint8_t num = ~memory_get(cpu->nes, cpu->oc_addr);
+	uint8_t num = ~memory_get(cpu->nes, cpu->eff_addr);
 	do_add(cpu, num);
 }
 
-/* Comparison helper */
 static void do_compare(CPU* cpu, uint8_t reg)
 {
-	uint8_t num = memory_get(cpu->nes, cpu->oc_addr);
+	uint8_t num = memory_get(cpu->nes, cpu->eff_addr);
 	if (num > reg)
-		clc(cpu);
+		cpu->p &= ~FLAG_C;
 	else
-		sec(cpu);
+		cpu->p |= FLAG_C;
 	update_flags(cpu, reg - num);
 }
 
@@ -278,35 +313,35 @@ static void cmp(CPU* cpu)
 	do_compare(cpu, cpu->a);
 }
 
-/* CPX - compare with x register */
+/* CPX - compare with X register */
 static void cpx(CPU* cpu)
 {
 	do_compare(cpu, cpu->x);
 }
 
-/* CPY - compare with y register */
+/* CPY - compare with Y register */
 static void cpy(CPU* cpu)
 {
 	do_compare(cpu, cpu->y);
 }
 
-/*** Increments and decrements ***/
+/** Increments and decrements **/
 /* INC - increment value at memory location */
 static void inc(CPU* cpu)
 {
-	uint8_t val = memory_get(cpu->nes, cpu->oc_addr)+1;
-	memory_set(cpu->nes, cpu->oc_addr, val);
+	uint8_t val = memory_get(cpu->nes, cpu->eff_addr)+1;
+	memory_set(cpu->nes, cpu->eff_addr, val);
 	update_flags(cpu, val);
 }
 
-/* INX - increment x register */
+/* INX - increment X register */
 static void inx(CPU* cpu)
 {
 	++cpu->x;
 	update_flags(cpu, cpu->x);
 }
 
-/* INY - increment y register */
+/* INY - increment Y register */
 static void iny(CPU* cpu)
 {
 	++cpu->y;
@@ -316,42 +351,40 @@ static void iny(CPU* cpu)
 /* DEC - decrement memory location */
 static void dec(CPU* cpu)
 {
-	uint8_t val = memory_get(cpu->nes, cpu->oc_addr)-1;
-	memory_set(cpu->nes, cpu->oc_addr, val);
+	uint8_t val = memory_get(cpu->nes, cpu->eff_addr)-1;
+	memory_set(cpu->nes, cpu->eff_addr, val);
 	update_flags(cpu, val);
 }
 
-/* DEX - decrement x register */
+/* DEX - decrement X register */
 static void dex(CPU* cpu)
 {
 	--cpu->x;
 	update_flags(cpu, cpu->x);
 }
 
-/* DEY - decrement y register */
+/* DEY - decrement Y register */
 static void dey(CPU* cpu)
 {
 	--cpu->y;
 	update_flags(cpu, cpu->y);
 }
 
-/*** Shifts ***/
-/* Shift helper function. Gets number to shift based on addressing mode */
+/** Shifts **/
 static uint8_t get_shift_num(CPU* cpu)
 {
-	if (cpu->instruction_amode == AMODE_ACC)
+	if (cpu->instr_amode == AMODE_ACC)
 		return cpu->a;
 	else
-		return memory_get(cpu->nes, cpu->oc_addr);
+		return memory_get(cpu->nes, cpu->eff_addr);
 }
 
-/* Shift helper function. Stores shifted number to based on addressing mode */
 static void store_shift_result(CPU* cpu, uint8_t num)
 {
-	if (cpu->instruction_amode == AMODE_ACC)
+	if (cpu->instr_amode == AMODE_ACC)
 		cpu->a = num;
 	else
-		memory_set(cpu->nes, cpu->oc_addr, num);
+		memory_set(cpu->nes, cpu->eff_addr, num);
 }
 
 /* ASL - arithmetic shift left */
@@ -359,8 +392,7 @@ static void asl(CPU* cpu)
 {
 	/* C <- num <- 0 */
 	uint8_t num = get_shift_num(cpu);
-	clc(cpu);
-	cpu->p |= (num & 0x80) >> 7;
+	cpu->p = (cpu->p & ~FLAG_C) | ((num >> 7) & 0x01);
 	num <<= 1;
 	update_flags(cpu, num);
 	store_shift_result(cpu, num);
@@ -371,8 +403,7 @@ static void lsr(CPU* cpu)
 {
 	/* 0 -> num -> C */
 	uint8_t num = get_shift_num(cpu);
-	clc(cpu);
-	cpu->p |= num & 0x01;
+	cpu->p = (cpu->p & ~FLAG_C) | (num & 0x01);
 	num >>= 1;
 	update_flags(cpu, num);
 	store_shift_result(cpu, num);
@@ -384,10 +415,8 @@ static void rol(CPU* cpu)
 	/* C <- num <- C */
 	uint8_t num = get_shift_num(cpu);
 	uint8_t carry = cpu->p & FLAG_C;
-	clc(cpu);
-	cpu->p |= (num & 0x80) >> 7;
-	num <<= 1;
-	num |= carry;
+	cpu->p = (cpu->p & ~FLAG_C) | ((num >> 7) & 0x01);
+	num = (num << 1) | carry;
 	update_flags(cpu, num);
 	store_shift_result(cpu, num);
 }
@@ -397,49 +426,44 @@ static void ror(CPU* cpu)
 {
 	/* C -> num -> C */
 	uint8_t num = get_shift_num(cpu);
-	uint8_t carry = cpu->p & FLAG_C;	
-	clc(cpu);
-	cpu->p |= num & FLAG_C;
-	num >>= 1;
-	num |= carry << 7;
+	uint8_t carry = cpu->p & FLAG_C;
+	cpu->p = (cpu->p & ~FLAG_C) | (num & FLAG_C);
+	num = (carry << 7) | (num >> 1);
 	update_flags(cpu, num);
 	store_shift_result(cpu, num);
 }
 
-/*** Jumps and calls ***/
+/** Jumps and calls **/
 /* JMP - jump to location */
 static void jmp(CPU* cpu)
 {
-	cpu->pc = cpu->oc_addr;
+	cpu->pc = cpu->eff_addr;
 }
 
 /* JSR - jump to subroutine */
 static void jsr(CPU* cpu)
 {
 	/* Push PC onto the stack */
-	memory_set(cpu->nes, 0x100 | cpu->sp--, (cpu->pc-1) >> 8);
-	memory_set(cpu->nes, 0x100 | cpu->sp--, (cpu->pc-1) & 0xFF);
-	cpu->pc = cpu->oc_addr;
+	stack_push16(cpu, cpu->pc-1);
+	cpu->pc = cpu->eff_addr;
 }
 
 /* RTS - return from subroutine */
 static void rts(CPU* cpu)
 {
 	/* Pull PC off the stack */
-	cpu->pc = (memory_get(cpu->nes, 0x100 | ++cpu->sp) |
-			  (memory_get(cpu->nes, 0x100 | ++cpu->sp) << 8)) + 1;
+	cpu->pc = stack_pop16(cpu) + 1;
 }
 
-/*** Conditional branches ***/
-/* Branching helper function. Performs branch and calculates cycles */
+/** Conditional branches **/
 static void do_branch(CPU* cpu)
 {
 	/* Extra cycle taken if branch is to another page */
-	if ((cpu->oc_addr & 0xFF00) != (cpu->pc & 0xFF00))
+	if ((cpu->eff_addr & 0xFF00) != (cpu->pc & 0xFF00))
 		++cpu->cycles;
 
 	/* Perform branch operation */
-	cpu->pc = cpu->oc_addr;
+	cpu->pc = cpu->eff_addr;
 	++cpu->cycles;
 }
 
@@ -499,13 +523,12 @@ static void bvs(CPU* cpu)
 		do_branch(cpu);
 }
 
-/*** System instructions ***/
-/* Jump to interrupt vector. Common behavior to NMI, IRQ, and BRK */
-static void jump_interrupt(CPU* cpu, uint16_t vector) {
-	memory_set(cpu->nes, 0x100 | cpu->sp--, (cpu->pc) >> 8);
-	memory_set(cpu->nes, 0x100 | cpu->sp--, (cpu->pc) & 0xFF);
+/** System instructions **/
+static void jump_interrupt(CPU* cpu, uint16_t vector)
+{
+	stack_push16(cpu, cpu->pc);
 	php(cpu);
-	sei(cpu);
+	cpu->p |= FLAG_I;
 	cpu->pc = memory_get16(cpu->nes, vector);
 }
 
@@ -524,132 +547,267 @@ static void rti(CPU* cpu)
 {
 	plp(cpu);
 	cpu->p &= ~FLAG_B; /* B flag only set on stack */
-	cpu->pc = (memory_get(cpu->nes, 0x100 | ++cpu->sp) |
-			  (memory_get(cpu->nes, 0x100 | ++cpu->sp) << 8));
+	cpu->pc = stack_pop16(cpu);
 }
 
+/** Illegal instructions **/
+/* TODO: warn if these are used!! */
+/* AHX - store A & X & (addr high byte plus 1) at addr */
+static void ahx(CPU* cpu)
+{
+	memory_set(cpu->nes, cpu->eff_addr, cpu->a & cpu->x & ((cpu->eff_addr >> 8) + 1));
+}
 
-/*** TODO: Undocumented instructions ***/
+/* ALR - AND + LSR */
+static void alr(CPU* cpu)
+{
+	and(cpu);
+	lsr(cpu);
+}
+
+/* ANC - AND + set carry bit if result is negative */
+static void anc(CPU* cpu)
+{
+	and(cpu);
+	if (cpu->a & 0x80)
+		cpu->p |= FLAG_C;
+	else
+		cpu->p &= ~FLAG_C;
+}
+
+/* ARR - similar to AND + ROR. AND byte with A, V = A.5 XOR A.6,
+   swap C and A.6, then finally shift A right (bit 0 is lost) */
+static void arr(CPU* cpu)
+{
+	uint8_t xor, b6;
+	uint8_t carry = cpu->p & FLAG_C;
+	cpu->a &= memory_get(cpu->nes, cpu->eff_addr);
+
+	b6 = (cpu->a >> 6) & 0x01;
+	xor = (b6 ^ (cpu->a >> 5)) & 0x01;
+	cpu->p = (cpu->p & ~FLAG_V & ~FLAG_C) | (xor << 6) | b6;
+	cpu->a = (carry << 7) | (cpu->a >> 1);
+	update_flags(cpu, cpu->a);
+}
+
+/* AXS - subtract byte from A & X and store in X */
+static void axs(CPU* cpu)
+{
+	uint8_t num = (cpu->a & cpu->x);
+	cpu->x = num - memory_get(cpu->nes, cpu->eff_addr);
+	do_compare(cpu, num);
+}
+
+/* DCP - DEC + CMP */
+static void dcp(CPU* cpu)
+{
+	dec(cpu);
+	cmp(cpu);
+}
+
+/* ISC - INC + SBC */
+static void isc(CPU* cpu)
+{
+	inc(cpu);
+	sbc(cpu);
+}
 
 /* KIL - crash the processor */
 static void kil(CPU* cpu)
 {
-	/* TODO: CRASH PROCESSOR */
+	cpu->is_running = 0;
+}
+
+/* LAS - A = X = SP = value & SP */
+static void las(CPU* cpu)
+{
+	uint8_t val = memory_get(cpu->nes, cpu->eff_addr) & cpu->sp;
+	cpu->a = cpu->x = cpu->sp = val;
+	update_flags(cpu, val);
+}
+
+/* LAX - LDA + LDX */
+static void lax(CPU* cpu)
+{
+	lda(cpu);
+	ldx(cpu);
+}
+
+/* RLA - ROL + AND */
+static void rla(CPU* cpu)
+{
+	rol(cpu);
+	and(cpu);
+}
+
+/* RRA - ROR + ADC */
+static void rra(CPU* cpu)
+{
+	ror(cpu);
+	adc(cpu);
+}
+
+/* SAX - store A & X at memory location */
+static void sax(CPU* cpu)
+{
+	memory_set(cpu->nes, cpu->eff_addr, cpu->a & cpu->x);
+}
+
+/* SHX - store X & (addr high byte plus 1) at addr */
+static void shx(CPU* cpu)
+{
+	memory_set(cpu->nes, cpu->eff_addr, cpu->x & ((cpu->eff_addr >> 8) + 1));
+}
+
+/* SHY - store Y & (addr high byte plus 1) at addr */
+static void shy(CPU* cpu)
+{
+	memory_set(cpu->nes, cpu->eff_addr, cpu->y & ((cpu->eff_addr >> 8) + 1));
+}
+
+/* SLO - ASL + ORA */
+static void slo(CPU* cpu)
+{
+	asl(cpu);
+	ora(cpu);
+}
+
+/* SRE - LSR + EOR */
+static void sre(CPU* cpu)
+{
+	lsr(cpu);
+	eor(cpu);
+}
+
+/* TAS - store A & X in SP, store result & (addr high byte plus 1) at addr */
+static void tas(CPU* cpu)
+{
+	cpu->sp = cpu->a & cpu->x;
+	memory_set(cpu->nes, cpu->eff_addr, cpu->sp & ((cpu->eff_addr >> 8) + 1));
+}
+
+/* XAA - TXA + AND */
+void xaa(CPU* cpu)
+{
+	/* TODO: highly unstable (use magic) */
+	txa(cpu);
+	and(cpu);
 }
 
 /*** Lookup tables ***/
 static char* instr_names[256] =
 {
-	"BRK", "ORA", "KIL", "NOP", "NOP", "ORA", "ASL", "NOP",
-	"PHP", "ORA", "ASL", "NOP", "NOP", "ORA", "ASL", "NOP",
-	"BPL", "ORA", "KIL", "NOP", "NOP", "ORA", "ASL", "NOP",
-	"CLC", "ORA", "NOP", "NOP", "NOP", "ORA", "ASL", "NOP",
-	"JSR", "AND", "KIL", "NOP", "BIT", "AND", "ROL", "NOP",
-	"PLP", "AND", "ROL", "NOP", "BIT", "AND", "ROL", "NOP",
-	"BMI", "AND", "KIL", "NOP", "NOP", "AND", "ROL", "NOP",
-	"SEC", "AND", "NOP", "NOP", "NOP", "AND", "ROL", "NOP",
-	"RTI", "EOR", "KIL", "NOP", "NOP", "EOR", "LSR", "NOP",
-	"PHA", "EOR", "LSR", "NOP", "JMP", "EOR", "LSR", "NOP",
-	"BVC", "EOR", "KIL", "NOP", "NOP", "EOR", "LSR", "NOP",
-	"CLI", "EOR", "NOP", "NOP", "NOP", "EOR", "LSR", "NOP",
-	"RTS", "ADC", "KIL", "NOP", "NOP", "ADC", "ROR", "NOP",
-	"PLA", "ADC", "ROR", "NOP", "JMP", "ADC", "ROR", "NOP",
-	"BVS", "ADC", "KIL", "NOP", "NOP", "ADC", "ROR", "NOP",
-	"SEI", "ADC", "NOP", "NOP", "NOP", "ADC", "ROR", "NOP",
-	"NOP", "STA", "NOP", "NOP", "STY", "STA", "STX", "NOP",
-	"DEY", "NOP", "TXA", "NOP", "STY", "STA", "STX", "NOP",
-	"BCC", "STA", "KIL", "NOP", "STY", "STA", "STX", "NOP",
-	"TYA", "STA", "TXS", "NOP", "NOP", "STA", "NOP", "NOP",
-	"LDY", "LDA", "LDX", "NOP", "LDY", "LDA", "LDX", "NOP",
-	"TAY", "LDA", "TAX", "NOP", "LDY", "LDA", "LDX", "NOP",
-	"BCS", "LDA", "KIL", "NOP", "LDY", "LDA", "LDX", "NOP",
-	"CLV", "LDA", "TSX", "NOP", "LDY", "LDA", "LDX", "NOP",
-	"CPY", "CMP", "NOP", "NOP", "CPY", "CMP", "DEC", "NOP",
-	"INY", "CMP", "DEX", "NOP", "CPY", "CMP", "DEC", "NOP",
-	"BNE", "CMP", "KIL", "NOP", "NOP", "CMP", "DEC", "NOP",
-	"CLD", "CMP", "NOP", "NOP", "NOP", "CMP", "DEC", "NOP",
-	"CPX", "SBC", "NOP", "NOP", "CPX", "SBC", "INC", "NOP",
-	"INX", "SBC", "NOP", "NOP", "CPX", "SBC", "INC", "NOP",
-	"BEQ", "SBC", "KIL", "NOP", "NOP", "SBC", "INC", "NOP",
-	"SED", "SBC", "NOP", "NOP", "NOP", "SBC", "INC", "NOP"
+	"BRK", "ORA", "KIL", "SLO", "NOP", "ORA", "ASL", "SLO",
+	"PHP", "ORA", "ASL", "ANC", "NOP", "ORA", "ASL", "SLO",
+	"BPL", "ORA", "KIL", "SLO", "NOP", "ORA", "ASL", "SLO",
+	"CLC", "ORA", "NOP", "SLO", "NOP", "ORA", "ASL", "SLO",
+	"JSR", "AND", "KIL", "RLA", "BIT", "AND", "ROL", "RLA",
+	"PLP", "AND", "ROL", "ANC", "BIT", "AND", "ROL", "RLA",
+	"BMI", "AND", "KIL", "RLA", "NOP", "AND", "ROL", "RLA",
+	"SEC", "AND", "NOP", "RLA", "NOP", "AND", "ROL", "RLA",
+	"RTI", "EOR", "KIL", "SRE", "NOP", "EOR", "LSR", "SRE",
+	"PHA", "EOR", "LSR", "ALR", "JMP", "EOR", "LSR", "SRE",
+	"BVC", "EOR", "KIL", "SRE", "NOP", "EOR", "LSR", "SRE",
+	"CLI", "EOR", "NOP", "SRE", "NOP", "EOR", "LSR", "SRE",
+	"RTS", "ADC", "KIL", "RRA", "NOP", "ADC", "ROR", "RRA",
+	"PLA", "ADC", "ROR", "ARR", "JMP", "ADC", "ROR", "RRA",
+	"BVS", "ADC", "KIL", "RRA", "NOP", "ADC", "ROR", "RRA",
+	"SEI", "ADC", "NOP", "RRA", "NOP", "ADC", "ROR", "RRA",
+	"NOP", "STA", "NOP", "SAX", "STY", "STA", "STX", "SAX",
+	"DEY", "NOP", "TXA", "XAA", "STY", "STA", "STX", "SAX",
+	"BCC", "STA", "KIL", "AHX", "STY", "STA", "STX", "SAX",
+	"TYA", "STA", "TXS", "TAS", "NOP", "STA", "NOP", "AHX",
+	"LDY", "LDA", "LDX", "LAX", "LDY", "LDA", "LDX", "LAX",
+	"TAY", "LDA", "TAX", "LAX", "LDY", "LDA", "LDX", "LAX",
+	"BCS", "LDA", "KIL", "LAX", "LDY", "LDA", "LDX", "LAX",
+	"CLV", "LDA", "TSX", "LAS", "LDY", "LDA", "LDX", "LAX",
+	"CPY", "CMP", "NOP", "DCP", "CPY", "CMP", "DEC", "DCP",
+	"INY", "CMP", "DEX", "AXS", "CPY", "CMP", "DEC", "DCP",
+	"BNE", "CMP", "KIL", "DCP", "NOP", "CMP", "DEC", "DCP",
+	"CLD", "CMP", "NOP", "DCP", "NOP", "CMP", "DEC", "DCP",
+	"CPX", "SBC", "NOP", "ISC", "CPX", "SBC", "INC", "ISC",
+	"INX", "SBC", "NOP", "SBC", "CPX", "SBC", "INC", "ISC",
+	"BEQ", "SBC", "KIL", "ISC", "NOP", "SBC", "INC", "ISC",
+	"SED", "SBC", "NOP", "ISC", "NOP", "SBC", "INC", "ISC"
 };
 
 static void (*instructions[256])(CPU* cpu) =
 {
-	brk, ora, kil, nop, nop, ora, asl, nop, php, ora, asl, nop, nop, ora, asl, nop,
-	bpl, ora, kil, nop, nop, ora, asl, nop, clc, ora, nop, nop, nop, ora, asl, nop,
-	jsr, and, kil, nop, bit, and, rol, nop, plp, and, rol, nop, bit, and, rol, nop,
-	bmi, and, kil, nop, nop, and, rol, nop, sec, and, nop, nop, nop, and, rol, nop,
-	rti, eor, kil, nop, nop, eor, lsr, nop, pha, eor, lsr, nop, jmp, eor, lsr, nop,
-	bvc, eor, kil, nop, nop, eor, lsr, nop, cli, eor, nop, nop, nop, eor, lsr, nop,
-	rts, adc, kil, nop, nop, adc, ror, nop, pla, adc, ror, nop, jmp, adc, ror, nop,
-	bvs, adc, kil, nop, nop, adc, ror, nop, sei, adc, nop, nop, nop, adc, ror, nop,
-	nop, sta, nop, nop, sty, sta, stx, nop, dey, nop, txa, nop, sty, sta, stx, nop,
-	bcc, sta, kil, nop, sty, sta, stx, nop, tya, sta, txs, nop, nop, sta, nop, nop,
-	ldy, lda, ldx, nop, ldy, lda, ldx, nop, tay, lda, tax, nop, ldy, lda, ldx, nop,
-	bcs, lda, kil, nop, ldy, lda, ldx, nop, clv, lda, tsx, nop, ldy, lda, ldx, nop,
-	cpy, cmp, nop, nop, cpy, cmp, dec, nop, iny, cmp, dex, nop, cpy, cmp, dec, nop,
-	bne, cmp, kil, nop, nop, cmp, dec, nop, cld, cmp, nop, nop, nop, cmp, dec, nop,
-	cpx, sbc, nop, nop, cpx, sbc, inc, nop, inx, sbc, nop, nop, cpx, sbc, inc, nop,
-	beq, sbc, kil, nop, nop, sbc, inc, nop, sed, sbc, nop, nop, nop, sbc, inc, nop
+	brk, ora, kil, slo, nop, ora, asl, slo, php, ora, asl, anc, nop, ora, asl, slo,
+	bpl, ora, kil, slo, nop, ora, asl, slo, clc, ora, nop, slo, nop, ora, asl, slo,
+	jsr, and, kil, rla, bit, and, rol, rla, plp, and, rol, anc, bit, and, rol, rla,
+	bmi, and, kil, rla, nop, and, rol, rla, sec, and, nop, rla, nop, and, rol, rla,
+	rti, eor, kil, sre, nop, eor, lsr, sre, pha, eor, lsr, alr, jmp, eor, lsr, sre,
+	bvc, eor, kil, sre, nop, eor, lsr, sre, cli, eor, nop, sre, nop, eor, lsr, sre,
+	rts, adc, kil, rra, nop, adc, ror, rra, pla, adc, ror, arr, jmp, adc, ror, rra,
+	bvs, adc, kil, rra, nop, adc, ror, rra, sei, adc, nop, rra, nop, adc, ror, rra,
+	nop, sta, nop, sax, sty, sta, stx, sax, dey, nop, txa, xaa, sty, sta, stx, sax,
+	bcc, sta, kil, ahx, sty, sta, stx, sax, tya, sta, txs, tas, shy, sta, shx, ahx,
+	ldy, lda, ldx, lax, ldy, lda, ldx, lax, tay, lda, tax, lax, ldy, lda, ldx, lax,
+	bcs, lda, kil, lax, ldy, lda, ldx, lax, clv, lda, tsx, las, ldy, lda, ldx, lax,
+	cpy, cmp, nop, dcp, cpy, cmp, dec, dcp, iny, cmp, dex, axs, cpy, cmp, dec, dcp,
+	bne, cmp, kil, dcp, nop, cmp, dec, dcp, cld, cmp, nop, dcp, nop, cmp, dec, dcp,
+	cpx, sbc, nop, isc, cpx, sbc, inc, isc, inx, sbc, nop, sbc, cpx, sbc, inc, isc,
+	beq, sbc, kil, isc, nop, sbc, inc, isc, sed, sbc, nop, isc, nop, sbc, inc, isc
 };
 
 static AddressingMode amodes[256] =
 {
-	AMODE_IMP, AMODE_XID, AMODE_NONE, AMODE_NONE, AMODE_NONE, AMODE_ZPG, AMODE_ZPG, AMODE_NONE,
-	AMODE_IMP, AMODE_IMM, AMODE_ACC, AMODE_NONE, AMODE_NONE, AMODE_ABS, AMODE_ABS, AMODE_NONE,
-	AMODE_REL, AMODE_IDY, AMODE_NONE, AMODE_NONE, AMODE_NONE, AMODE_ZPX, AMODE_ZPX, AMODE_NONE,
-	AMODE_IMP, AMODE_ABY, AMODE_NONE, AMODE_NONE, AMODE_NONE, AMODE_ABX, AMODE_ABX, AMODE_NONE,
-	AMODE_ABS, AMODE_XID, AMODE_NONE, AMODE_NONE, AMODE_ZPG, AMODE_ZPG, AMODE_ZPG, AMODE_NONE,
-	AMODE_IMP, AMODE_IMM, AMODE_ACC, AMODE_NONE, AMODE_ABS, AMODE_ABS, AMODE_ABS, AMODE_NONE,
-	AMODE_REL, AMODE_IDY, AMODE_NONE, AMODE_NONE, AMODE_NONE, AMODE_ZPX, AMODE_ZPX, AMODE_NONE,
-	AMODE_IMP, AMODE_ABY, AMODE_NONE, AMODE_NONE, AMODE_NONE, AMODE_ABX, AMODE_ABX, AMODE_NONE,
-	AMODE_IMP, AMODE_XID, AMODE_NONE, AMODE_NONE, AMODE_NONE, AMODE_ZPG, AMODE_ZPG, AMODE_NONE,
-	AMODE_IMP, AMODE_IMM, AMODE_ACC, AMODE_NONE, AMODE_ABS, AMODE_ABS, AMODE_ABS, AMODE_NONE,
-	AMODE_REL, AMODE_IDY, AMODE_NONE, AMODE_NONE, AMODE_NONE, AMODE_ZPX, AMODE_ZPX, AMODE_NONE,
-	AMODE_IMP, AMODE_ABY, AMODE_NONE, AMODE_NONE, AMODE_NONE, AMODE_ABX, AMODE_ABX, AMODE_NONE,
-	AMODE_IMP, AMODE_XID, AMODE_NONE, AMODE_NONE, AMODE_NONE, AMODE_ZPG, AMODE_ZPG, AMODE_NONE,
-	AMODE_IMP, AMODE_IMM, AMODE_ACC, AMODE_NONE, AMODE_IND, AMODE_ABS, AMODE_ABS, AMODE_NONE,
-	AMODE_REL, AMODE_IDY, AMODE_NONE, AMODE_NONE, AMODE_NONE, AMODE_ZPX, AMODE_ZPX, AMODE_NONE,
-	AMODE_IMP, AMODE_ABY, AMODE_NONE, AMODE_NONE, AMODE_NONE, AMODE_ABX, AMODE_ABX, AMODE_NONE,
-	AMODE_NONE, AMODE_XID, AMODE_NONE, AMODE_NONE, AMODE_ZPG, AMODE_ZPG, AMODE_ZPG, AMODE_NONE,
-	AMODE_IMP, AMODE_NONE, AMODE_IMP, AMODE_NONE, AMODE_ABS, AMODE_ABS, AMODE_ABS, AMODE_NONE,
-	AMODE_REL, AMODE_IDY, AMODE_NONE, AMODE_NONE, AMODE_ZPX, AMODE_ZPX, AMODE_ZPY, AMODE_NONE,
-	AMODE_IMP, AMODE_ABY, AMODE_IMP, AMODE_NONE, AMODE_NONE, AMODE_ABX, AMODE_NONE, AMODE_NONE,
-	AMODE_IMM, AMODE_XID, AMODE_IMM, AMODE_NONE, AMODE_ZPG, AMODE_ZPG, AMODE_ZPG, AMODE_NONE,
-	AMODE_IMP, AMODE_IMM, AMODE_IMP, AMODE_NONE, AMODE_ABS, AMODE_ABS, AMODE_ABS, AMODE_NONE,
-	AMODE_REL, AMODE_IDY, AMODE_NONE, AMODE_NONE, AMODE_ZPX, AMODE_ZPX, AMODE_ZPY, AMODE_NONE,
-	AMODE_IMP, AMODE_ABY, AMODE_IMP, AMODE_NONE, AMODE_ABX, AMODE_ABX, AMODE_ABY, AMODE_NONE,
-	AMODE_IMM, AMODE_XID, AMODE_NONE, AMODE_NONE, AMODE_ZPG, AMODE_ZPG, AMODE_ZPG, AMODE_NONE,
-	AMODE_IMP, AMODE_IMM, AMODE_IMP, AMODE_NONE, AMODE_ABS, AMODE_ABS, AMODE_ABS, AMODE_NONE,
-	AMODE_REL, AMODE_IDY, AMODE_NONE, AMODE_NONE, AMODE_NONE, AMODE_ZPX, AMODE_ZPX, AMODE_NONE,
-	AMODE_IMP, AMODE_ABY, AMODE_NONE, AMODE_NONE, AMODE_NONE, AMODE_ABX, AMODE_ABX, AMODE_NONE,
-	AMODE_IMM, AMODE_XID, AMODE_NONE, AMODE_NONE, AMODE_ZPG, AMODE_ZPG, AMODE_ZPG, AMODE_NONE,
-	AMODE_IMP, AMODE_IMM, AMODE_IMP, AMODE_NONE, AMODE_ABS, AMODE_ABS, AMODE_ABS, AMODE_NONE,
-	AMODE_REL, AMODE_IDY, AMODE_NONE, AMODE_NONE, AMODE_NONE, AMODE_ZPX, AMODE_ZPX, AMODE_NONE,
-	AMODE_IMP, AMODE_ABY, AMODE_NONE, AMODE_NONE, AMODE_NONE, AMODE_ABX, AMODE_ABX, AMODE_NONE
+	AMODE_IMP, AMODE_XID, AMODE_IMP, AMODE_XID, AMODE_ZPG, AMODE_ZPG, AMODE_ZPG, AMODE_ZPG,
+	AMODE_IMP, AMODE_IMM, AMODE_ACC, AMODE_IMM, AMODE_ABS, AMODE_ABS, AMODE_ABS, AMODE_ABS,
+	AMODE_REL, AMODE_IDY, AMODE_IMP, AMODE_IDY, AMODE_ZPX, AMODE_ZPX, AMODE_ZPX, AMODE_ZPX,
+	AMODE_IMP, AMODE_ABY, AMODE_IMP, AMODE_ABY, AMODE_ABX, AMODE_ABX, AMODE_ABX, AMODE_ABX,
+	AMODE_ABS, AMODE_XID, AMODE_IMP, AMODE_XID, AMODE_ZPG, AMODE_ZPG, AMODE_ZPG, AMODE_ZPG,
+	AMODE_IMP, AMODE_IMM, AMODE_ACC, AMODE_IMM, AMODE_ABS, AMODE_ABS, AMODE_ABS, AMODE_ABS,
+	AMODE_REL, AMODE_IDY, AMODE_IMP, AMODE_IDY, AMODE_ZPX, AMODE_ZPX, AMODE_ZPX, AMODE_ZPX,
+	AMODE_IMP, AMODE_ABY, AMODE_IMP, AMODE_ABY, AMODE_ABX, AMODE_ABX, AMODE_ABX, AMODE_ABX,
+	AMODE_IMP, AMODE_XID, AMODE_IMP, AMODE_XID, AMODE_ZPG, AMODE_ZPG, AMODE_ZPG, AMODE_ZPG,
+	AMODE_IMP, AMODE_IMM, AMODE_ACC, AMODE_IMM, AMODE_ABS, AMODE_ABS, AMODE_ABS, AMODE_ABS,
+	AMODE_REL, AMODE_IDY, AMODE_IMP, AMODE_IDY, AMODE_ZPX, AMODE_ZPX, AMODE_ZPX, AMODE_ZPX,
+	AMODE_IMP, AMODE_ABY, AMODE_IMP, AMODE_ABY, AMODE_ABX, AMODE_ABX, AMODE_ABX, AMODE_ABX,
+	AMODE_IMP, AMODE_XID, AMODE_IMP, AMODE_XID, AMODE_ZPG, AMODE_ZPG, AMODE_ZPG, AMODE_ZPG,
+	AMODE_IMP, AMODE_IMM, AMODE_ACC, AMODE_IMM, AMODE_IND, AMODE_ABS, AMODE_ABS, AMODE_ABS,
+	AMODE_REL, AMODE_IDY, AMODE_IMP, AMODE_IDY, AMODE_ZPX, AMODE_ZPX, AMODE_ZPX, AMODE_ZPX,
+	AMODE_IMP, AMODE_ABY, AMODE_IMM, AMODE_ABY, AMODE_ABX, AMODE_ABX, AMODE_ABX, AMODE_ABX,
+	AMODE_IMM, AMODE_XID, AMODE_IMM, AMODE_XID, AMODE_ZPG, AMODE_ZPG, AMODE_ZPG, AMODE_ZPG,
+	AMODE_IMP, AMODE_IMM, AMODE_IMP, AMODE_IMM, AMODE_ABS, AMODE_ABS, AMODE_ABS, AMODE_ABS,
+	AMODE_REL, AMODE_IDY, AMODE_IMP, AMODE_IDY, AMODE_ZPX, AMODE_ZPX, AMODE_ZPY, AMODE_ZPY,
+	AMODE_IMP, AMODE_ABY, AMODE_IMP, AMODE_ABY, AMODE_ABX, AMODE_ABX, AMODE_ABY, AMODE_ABY,
+	AMODE_IMM, AMODE_XID, AMODE_IMM, AMODE_XID, AMODE_ZPG, AMODE_ZPG, AMODE_ZPG, AMODE_ZPG,
+	AMODE_IMP, AMODE_IMM, AMODE_IMP, AMODE_IMM, AMODE_ABS, AMODE_ABS, AMODE_ABS, AMODE_ABS,
+	AMODE_REL, AMODE_IDY, AMODE_IMP, AMODE_IDY, AMODE_ZPX, AMODE_ZPX, AMODE_ZPY, AMODE_ZPY,
+	AMODE_IMP, AMODE_ABY, AMODE_IMP, AMODE_ABY, AMODE_ABX, AMODE_ABX, AMODE_ABY, AMODE_ABY,
+	AMODE_IMM, AMODE_XID, AMODE_IMM, AMODE_XID, AMODE_ZPG, AMODE_ZPG, AMODE_ZPG, AMODE_ZPG,
+	AMODE_IMP, AMODE_IMM, AMODE_IMP, AMODE_IMM, AMODE_ABS, AMODE_ABS, AMODE_ABS, AMODE_ABS,
+	AMODE_REL, AMODE_IDY, AMODE_IMP, AMODE_IDY, AMODE_ZPX, AMODE_ZPX, AMODE_ZPX, AMODE_ZPX,
+	AMODE_IMP, AMODE_ABY, AMODE_IMP, AMODE_ABY, AMODE_ABX, AMODE_ABX, AMODE_ABX, AMODE_ABX,
+	AMODE_IMM, AMODE_XID, AMODE_IMM, AMODE_XID, AMODE_ZPG, AMODE_ZPG, AMODE_ZPG, AMODE_ZPG,
+	AMODE_IMP, AMODE_IMM, AMODE_IMP, AMODE_IMM, AMODE_ABS, AMODE_ABS, AMODE_ABS, AMODE_ABS,
+	AMODE_REL, AMODE_IDY, AMODE_IMP, AMODE_IDY, AMODE_ZPX, AMODE_ZPX, AMODE_ZPX, AMODE_ZPX,
+	AMODE_IMP, AMODE_ABY, AMODE_IMP, AMODE_ABY, AMODE_ABX, AMODE_ABX, AMODE_ABX, AMODE_ABX
 };
 
-static uint8_t instruction_cycles[256] =
+static uint8_t instr_cycles[256] =
 {
-	7, 6, 2, 8, 3, 3, 5, 5, 3, 2, 2, 2, 4, 4, 6, 6,
-	2, 5, 2, 8, 4, 4, 6, 6, 2, 4, 2, 7, 4, 4, 7, 7,
-	6, 6, 2, 8, 3, 3, 5, 5, 4, 2, 2, 2, 4, 4, 6, 6,
-	2, 5, 2, 8, 4, 4, 6, 6, 2, 4, 2, 7, 4, 4, 7, 7,
-	6, 6, 2, 8, 3, 3, 5, 5, 3, 2, 2, 2, 3, 4, 6, 6,
-	2, 5, 2, 8, 4, 4, 6, 6, 2, 4, 2, 7, 4, 4, 7, 7,
-	6, 6, 2, 8, 3, 3, 5, 5, 4, 2, 2, 2, 5, 4, 6, 6,
-	2, 5, 2, 8, 4, 4, 6, 6, 2, 4, 2, 7, 4, 4, 7, 7,
+	7, 6, 0, 8, 3, 3, 5, 5, 3, 2, 2, 2, 4, 4, 6, 6,
+	2, 5, 0, 8, 4, 4, 6, 6, 2, 4, 2, 7, 4, 4, 7, 7,
+	6, 6, 0, 8, 3, 3, 5, 5, 4, 2, 2, 2, 4, 4, 6, 6,
+	2, 5, 0, 8, 4, 4, 6, 6, 2, 4, 2, 7, 4, 4, 7, 7,
+	6, 6, 0, 8, 3, 3, 5, 5, 3, 2, 2, 2, 3, 4, 6, 6,
+	2, 5, 0, 8, 4, 4, 6, 6, 2, 4, 2, 7, 4, 4, 7, 7,
+	6, 6, 0, 8, 3, 3, 5, 5, 4, 2, 2, 2, 5, 4, 6, 6,
+	2, 5, 0, 8, 4, 4, 6, 6, 2, 4, 2, 7, 4, 4, 7, 7,
 	2, 6, 2, 6, 3, 3, 3, 3, 2, 2, 2, 2, 4, 4, 4, 4,
-	2, 6, 2, 6, 4, 4, 4, 4, 2, 5, 2, 5, 5, 5, 5, 5,
+	2, 6, 0, 6, 4, 4, 4, 4, 2, 5, 2, 5, 5, 5, 5, 5,
 	2, 6, 2, 6, 3, 3, 3, 3, 2, 2, 2, 2, 4, 4, 4, 4,
-	2, 5, 2, 5, 4, 4, 4, 4, 2, 4, 2, 4, 4, 4, 4, 4,
+	2, 5, 0, 5, 4, 4, 4, 4, 2, 4, 2, 4, 4, 4, 4, 4,
 	2, 6, 2, 8, 3, 3, 5, 5, 2, 2, 2, 2, 4, 4, 6, 6,
-	2, 5, 2, 8, 4, 4, 6, 6, 2, 4, 2, 7, 4, 4, 7, 7,
+	2, 5, 0, 8, 4, 4, 6, 6, 2, 4, 2, 7, 4, 4, 7, 7,
 	2, 6, 2, 8, 3, 3, 5, 5, 2, 2, 2, 2, 4, 4, 6, 6,
-	2, 5, 2, 8, 4, 4, 6, 6, 2, 4, 2, 7, 4, 4, 7, 7
+	2, 5, 0, 8, 4, 4, 6, 6, 2, 4, 2, 7, 4, 4, 7, 7
 };
 
+/* TODO: update for illegal ops */
 static uint8_t pagecross_cycles[256] =
 {
 	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -673,43 +831,23 @@ static uint8_t pagecross_cycles[256] =
 void cpu_init(CPU* cpu, NES* nes)
 {
 	memset(cpu, 0, sizeof(*cpu));
-	cpu->cycles = 0;
-	cpu->dma_cycles = 0;
-	cpu->oddcycle = 0;
 	cpu->nes = nes; /* set parent system */
 }
 
 void cpu_reset(CPU* cpu)
 {
-	/*cpu->p = 0x20 | FLAG_B | FLAG_I; /* unused, break, and IRQ disable flags *///
-	cpu->p = 0x20 | FLAG_I;
+	cpu->p = FLAG_U | FLAG_I;
 	cpu->a = cpu->x = cpu->y = 0;
-	cpu->sp = 0;
-
-	/* TODO: don't actually push anything? */
-	/* push pc */
-	memory_set(cpu->nes, 0x100 | cpu->sp--, (cpu->pc) >> 8);
-	memory_set(cpu->nes, 0x100 | cpu->sp--, (cpu->pc) & 0xFF);
-
-	/* push p */
-	php(cpu);
-
-	/* sp should now be 0xFD */
-
-	/* jump to reset vector */
+	cpu->sp = 0xFD;
 	cpu->pc = memory_get16(cpu->nes, ADDR_RESET);
-	/*cpu->pc = 0xC000; /* for nestest */
+	cpu->is_running = 1;
 
 	/* TODO: init memory */
-	/* after reset, IRQ disable flag set to true (ORed with 0x04) */
 	/* after reset, APU is silenced */
 }
 
-static void handle_interrupt(CPU* cpu, uint8_t type)
+static void handle_interrupt(CPU* cpu, InterruptType type)
 {
-	if (type == INT_NONE)
-		return;
-
 	/* Set jump address to interrupt handler */
 	switch (type)
 	{
@@ -726,86 +864,82 @@ static void handle_interrupt(CPU* cpu, uint8_t type)
 				jump_interrupt(cpu, ADDR_IRQ);
 				cpu->cycles += 7;
 			}
+			break;
 	}
 
-	cpu->interrupt = INT_NONE;
+	cpu->last_int = INT_NONE;
 }
 
-
-/* Absolute indexed addressing helper function. Use the the next two bytes plus
-   the value passed (from the appropriate register) to get effective address */
-static void get_abs_indexed_oc_addr(CPU* cpu, uint8_t i)
+static void update_eff_addr_abs_indexed(CPU* cpu, uint8_t i)
 {
+	/* Use the the next two bytes plus the value passed to get effective address */
 	uint16_t addr = memory_get16(cpu->nes, cpu->pc++);
 	++cpu->pc; /* for fecthing second byte */
-	cpu->oc_addr = addr + i;
+	cpu->eff_addr = addr + i;
 
 	/* Page cross cycle penalty */
-	if ((addr & 0xFF00) != (cpu->oc_addr & 0xFF00))
+	if ((addr & 0xFF00) != (cpu->eff_addr & 0xFF00))
 		cpu->cycles += pagecross_cycles[cpu->opcode];
 }
 
-static void get_oc_address(CPU* cpu)
+static void update_eff_addr(CPU* cpu)
 {
-	switch (cpu->instruction_amode)
+	switch (cpu->instr_amode)
 	{
 		/* Instructions with these addressing modes don't get values from memory */
-		case AMODE_NONE:
 		case AMODE_ACC:
 		case AMODE_IMP:
-			cpu->oc_addr = 0;
+			cpu->eff_addr = 0;
 			break;
 
 		/* Immediate addressing => Next byte is value */
 		case AMODE_IMM:
-			cpu->oc_addr = cpu->pc++;
+			cpu->eff_addr = cpu->pc++;
 			break;
 
 		/* Zero page addressing => Value of next byte equals address */
 		case AMODE_ZPG:
-			cpu->oc_addr = memory_get(cpu->nes, cpu->pc++) & 0xFF;
+			cpu->eff_addr = memory_get(cpu->nes, cpu->pc++) & 0xFF;
 			break;
 
 		/* Zero page, X addressing => Value of next byte plus the
 		   value in X equals address */
 		case AMODE_ZPX:
-			cpu->oc_addr = (memory_get(cpu->nes, cpu->pc++) + cpu->x) & 0xFF;
+			cpu->eff_addr = (memory_get(cpu->nes, cpu->pc++) + cpu->x) & 0xFF;
 			break;
 
 		/* Zero page, Y addressing => Value of next byte plus the value
 		   in Y equals address */
 		case AMODE_ZPY:
-			cpu->oc_addr = (memory_get(cpu->nes, cpu->pc++) + cpu->y) & 0xFF;
+			cpu->eff_addr = (memory_get(cpu->nes, cpu->pc++) + cpu->y) & 0xFF;
 			break;
 
 		/* Relative addressing => PC plus the value of the next byte equals address */
 		case AMODE_REL:
-		{
-			cpu->oc_addr = (int8_t)memory_get(cpu->nes, cpu->pc++) + cpu->pc;
+			cpu->eff_addr = (int8_t)memory_get(cpu->nes, cpu->pc++) + cpu->pc;
 			break;
-		}
 
 		/* Absolute addressing => Value of next two bytes equal address */
 		case AMODE_ABS:
-			cpu->oc_addr = memory_get16(cpu->nes, cpu->pc++);
+			cpu->eff_addr = memory_get16(cpu->nes, cpu->pc++);
 			++cpu->pc; /* for fetching second byte */
 			break;
 
 		/* Absolute, X addressing => Value of next two bytes plus value in X
 		   equals address */
 		case AMODE_ABX:
-			get_abs_indexed_oc_addr(cpu, cpu->x);
+			update_eff_addr_abs_indexed(cpu, cpu->x);
 			break;
 
 		/* Absolute, X addressing => Value of next two bytes plus value in Y
 		   equals address */
 		case AMODE_ABY:
-			get_abs_indexed_oc_addr(cpu, cpu->y);
+			update_eff_addr_abs_indexed(cpu, cpu->y);
 			break;
 
 		/* Indirect addressing => Address pointed to by the next 2 bytes equals address */
 		case AMODE_IND:
-			cpu->oc_addr = memory_get16_ind(cpu->nes, memory_get16(cpu->nes, cpu->pc++));
+			cpu->eff_addr = memory_get16_ind(cpu->nes, memory_get16(cpu->nes, cpu->pc++));
 			++cpu->pc; /* for fetching pointer high byte */
 			break;
 
@@ -814,19 +948,18 @@ static void get_oc_address(CPU* cpu)
 		case AMODE_XID:
 		{
 			uint8_t ptr = (memory_get(cpu->nes, cpu->pc++) + cpu->x) & 0xFF;
-			cpu->oc_addr = memory_get16_ind(cpu->nes, ptr);
+			cpu->eff_addr = memory_get16_ind(cpu->nes, ptr);
 			break;
 		}
 
-		/* Indirect indexed addressing => Y plus address pointed to by value of next two bytes
-		   equals address */
+		/* Indirect indexed addressing => Y plus address pointed to by value of next byte */
 		case AMODE_IDY:
 		{
 			uint16_t ptr = memory_get16_ind(cpu->nes, memory_get(cpu->nes, cpu->pc++) & 0xFF);
-			cpu->oc_addr = ptr + cpu->y;
+			cpu->eff_addr = ptr + cpu->y;
 
 			/* Page cross cycle penalty */
-			if ((ptr & 0xFF00) != (cpu->oc_addr & 0xFF00))
+			if ((ptr & 0xFF00) != (cpu->eff_addr & 0xFF00))
 				cpu->cycles += pagecross_cycles[cpu->opcode];
 			break;
 		}
@@ -847,27 +980,27 @@ int cpu_step(CPU* cpu)
 		return 1;
 	}
 
-	if (cpu->interrupt != INT_NONE) {
-		handle_interrupt(cpu, cpu->interrupt);
+	if (cpu->last_int != INT_NONE) {
+		handle_interrupt(cpu, cpu->last_int);
 		return cpu->cycles;
 	}
 
 	/*log = fopen("cpu.log", "a");*/
 
 	cpu->opcode = memory_get(cpu->nes, cpu->pc++);
-	cpu->instruction_amode = amodes[cpu->opcode];
+	cpu->instr_amode = amodes[cpu->opcode];
 	/*printf("%X\t%s ", cpu->pc-1, instr_names[cpu->opcode]);
 	/*fprintf(log, "%X\t%s ", cpu->pc-1, instr_names[cpu->opcode]);*/
-	get_oc_address(cpu);
-	/*fprintf(log, "PC:%x\tOPCODE:%s\tOPERAND:%x\tBYTES:%x\n", cpu->pc, instr_names[oci.opcode], oci.operand, instruction_cycles[oci.opcode]);*/
-	/*fprintf(log, "$%.4x\t\t\t", cpu->oc_addr);*/
-	/*printf("$%.4x\t\t\t", cpu->oc_addr);
+	update_eff_addr(cpu);
+	/*fprintf(log, "PC:%x\tOPCODE:%s\tOPERAND:%x\tBYTES:%x\n", cpu->pc, instr_names[oci.opcode], oci.operand, instr_cycles[oci.opcode]);*/
+	/*fprintf(log, "$%.4x\t\t\t", cpu->eff_addr);*/
+	/*printf("$%.4x\t\t\t", cpu->eff_addr);
 	printf("A:%.2X X:%.2X Y:%.2X P:%.2X SP:%.2X\n", cpu->a, cpu->x, cpu->y, cpu->p, cpu->sp);
 
 	/*fprintf(log, "A:%.2X X:%.2X Y:%.2X P:%.2X SP:%.2X\n", cpu->a, cpu->x, cpu->y, cpu->p, cpu->sp);
 	fclose(log);*/
 
-	cpu->cycles = instruction_cycles[cpu->opcode];
+	cpu->cycles = instr_cycles[cpu->opcode];
 
 	/* Used for adding another cycle during DMA writes */
 	cpu->oddcycle = (cpu->oddcycle ^ cpu->cycles%2);
@@ -876,7 +1009,7 @@ int cpu_step(CPU* cpu)
 	return cpu->cycles;
 }
 
-void cpu_interrupt(CPU* cpu, Interrupt type)
+void cpu_interrupt(CPU* cpu, InterruptType type)
 {
-	cpu->interrupt = type;
+	cpu->last_int = type;
 }
