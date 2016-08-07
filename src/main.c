@@ -2,6 +2,7 @@
 
 #include "renderer.h"
 #include "nes.h"
+#include "apu.h"
 
 int main(int argc, char** argv)
 {
@@ -11,6 +12,7 @@ int main(int argc, char** argv)
 	RenderSurface screen;
 	renderer_init_surface(&screen, "pNES");
 
+	/*apu_genwave();*/
 	nes_init(&nes);
 	nes_load_rom(&nes, argv[1]);
 

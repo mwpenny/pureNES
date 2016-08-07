@@ -2,6 +2,7 @@
 
 #include "memory.h"
 #include "ppu.h"
+#include "apu.h"
 #include "controller.h"
 
 /* CPU memory map (from https://en.wikibooks.org/wiki/NES_Programming/Memory_Map)
@@ -43,6 +44,8 @@ uint8_t memory_get(NES* nes, uint16_t addr)
 	/* TODO: finish this / support multiple controllers and/or peripherals */
 	else if (addr == 0x4016)
 		return controller_read_output(&nes->c1);
+	else if (addr < 0x4018)
+		return apu_read(&nes->apu, addr);
 	/*else if (addr == 0x4017)
 		return controller_read_output(&nes->c2);
 	/* TODO: read from other areas */
@@ -80,6 +83,8 @@ void memory_set(NES* nes, uint16_t addr, uint8_t val)
 		ppu_write(&nes->ppu, addr, val);
 	else if (addr == 0x4016)
 		controllers_write_input(val);
+	else if (addr < 0x4018)
+		return apu_write(&nes->apu, addr, val);
 	/* TODO: write to other areas */
 	else if (addr > 0x401F)
 		nes->game.mapper->write(&nes->game, addr, val);

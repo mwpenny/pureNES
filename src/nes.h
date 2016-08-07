@@ -5,6 +5,7 @@
 
 #include "cpu.h"
 #include "ppu.h"
+#include "apu.h"
 #include "controller.h"
 #include "game.h"
 #include "mapper.h"
@@ -17,6 +18,7 @@ typedef struct NES
 {
 	CPU cpu;
 	PPU ppu;
+	APU apu;
 	Controller c1;
 	Controller c2;
 	uint8_t ram[RAMSIZE];	
