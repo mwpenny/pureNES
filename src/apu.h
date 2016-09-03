@@ -7,7 +7,13 @@
 /* env vol/period naming */
 
 typedef struct {
+	uint16_t period;
+	uint16_t value;
+} Timer;
+
+typedef struct {
 	uint8_t duty;
+	uint8_t phase;
 	uint8_t lc_enabled;
 	uint8_t env_enabled;
 	uint8_t volume;
@@ -17,7 +23,7 @@ typedef struct {
 	uint8_t sweep_negate;
 	uint8_t sweep_shift;
 
-	uint16_t timer;
+	Timer timer;
 	uint8_t lc_load;
 } PulseChannel;
 
@@ -25,7 +31,7 @@ typedef struct {
 	uint8_t lc_enabled;
 	uint8_t lin_counter_reload;
 
-	uint16_t timer;
+	Timer timer;
 	uint8_t lc_load;	
 } TriangleChannel;
 
@@ -59,12 +65,16 @@ typedef struct {
 	DMCChannel dmc;
 
 	uint8_t fc_seq_mode;
+	uint16_t sample_rate;
+	int cycle;
 } APU;
 
-
+void apu_genwave();
 void apu_init(APU* apu);
+void apu_cleanup(APU* apu);
 void apu_write(APU* apu, uint16_t addr, uint8_t val);
 uint8_t apu_read (APU* apu, uint16_t addr);
+void apu_tick(APU* apu);
 
 
 #endif

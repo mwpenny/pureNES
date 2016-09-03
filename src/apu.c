@@ -5,17 +5,104 @@
 
 #include "apu.h"
 
+#ifndef M_TAU
+#define M_TAU 6.28318530717958647693
+#endif
 
+static uint8_t pulse_cycles[4] = {
+	0x40,  /* 01000000 - 12.5% duty */
+	0x60,  /* 01100000 - 25% duty   */
+	0x78,  /* 01111000 - 50% duty   */
+	0x9F   /* 10011111 - 75% duty   */
+};
+
+static void audio_callback(void* userdata, uint8_t* stream, int len)
+{
+	APU* apu = (APU*)userdata;
+
+	int i = 0;
+    while (i < len)
+	{
+		double f1 = (19687500/11)/(32*(apu->pulse1.timer.period+1));
+		double f2 = (19687500/11)/(32*(apu->pulse2.timer.period+1));
+
+		/* TODO: use duty cycle */
+		uint8_t wave = (pulse_cycles[apu->pulse1.duty] >> (7 - apu->pulse1.phase)) & 1;
+
+		/* TODO: don't hard code this */
+		static double phase1, phase2;
+
+		stream[i] = apu->pulse1.volume * sin(phase1);
+		stream[i] += apu->pulse2.volume * sin(phase2);
+
+		phase1 += (f1 * M_TAU / apu->sample_rate);
+		phase2 += (f2 * M_TAU / apu->sample_rate);
+        ++i;
+    }
+}
 
 void apu_init(APU* apu)
 {
+	SDL_AudioSpec desired, obtained;
 	memset(apu, 0, sizeof(*apu));
+	apu->sample_rate = 44100;
+
+	/* TODO: not exact? "The NES outputs ~1789773 samples a second whereas PCs
+	   typically only do 44100 (assuming 44KHz output). You essentially have to
+	   combine the output for several cycles into one sample */
+    desired.freq = apu->sample_rate;
+    desired.format = AUDIO_S16SYS;  /* 32 bit support in SDL 2 */
+    desired.channels = 1;
+    desired.samples = 2048; /* TODO: adjust? */
+    desired.callback = audio_callback;
+	desired.userdata = apu;
+
+    /* TODO: error checking.
+	   Returns 0 if successful, placing actual hardware params in obtained.
+	   If obtained is NULL, audio data passed to callback function will be
+	   guaranteed to be in the requested format, and will be automatically
+	   converted to hardware audio format if necessary. Returns -1 if it
+	   failed to open the audio device, or couldn't set up the audio thread. */
+    SDL_OpenAudio(&desired, &obtained);
+
+    /* Enable audio device.
+
+	TODO: Since audio driver may modify requested size of audio buffer,
+	should allocate any local mixing buffers after device is opened. */
+    SDL_PauseAudio(0);
+}
+
+void apu_cleanup(APU* apu)
+{
+	SDL_CloseAudio();
+}
+
+static void pulse_step(PulseChannel* channel)
+{
+	if (channel->timer.value-- == 0)
+	{
+		channel->timer.value = channel->timer.period;
+		channel->phase = (channel->phase + 1) & 7;
+	}
+}
+
+void apu_tick(APU* apu)
+{
+	/* APU runs at half speed of CPU */
+	if (apu->cycle % 2)
+	{
+		pulse_step(&apu->pulse1);
+		pulse_step(&apu->pulse2);
+	}
+
+	/* TODO: deal with overflow */
+	++apu->cycle;
 }
 
 /* TODO: combine some of these for channels with common properties */
 static void pulse_flags1_write(PulseChannel* channel, uint8_t val)
 {
-	channel->duty = (val >> 6) & 3;
+	channel->duty = pulse_cycles[(val >> 6) & 3];
 	channel->lc_enabled = (val & 0x20) == 0;
 	channel->env_enabled = (val & 0x10) == 0;
 	channel->volume = val & 0xF;	
@@ -33,15 +120,17 @@ static void pulse_flags2_write(PulseChannel* channel, uint8_t val)
 static void pulse_flags3_write(PulseChannel* channel, uint8_t val)
 {
 	/* Write timer lo */
-	channel->timer = (channel->timer & 0x700) | val;
+	channel->timer.period = (channel->timer.period & 0x700) | val;
 }
 
 static void pulse_flags4_write(PulseChannel* channel, uint8_t val)
 {
 	/* Write timer hi and length counter reload index */
 	/* TODO: also resets duty and starts envelope */
-	channel->timer = (channel->timer & 0xFF) | ((val & 7) << 8);
+	channel->timer.period = (channel->timer.period & 0xFF) | ((val & 7) << 8);
 	channel->lc_load = (val >> 3) & 0x1F;  /* TODO: reload directly? */
+
+	channel->phase = 0;
 }
 
 static void triangle_flags1_write(TriangleChannel* channel, uint8_t val)
@@ -53,14 +142,14 @@ static void triangle_flags1_write(TriangleChannel* channel, uint8_t val)
 static void triangle_flags2_write(TriangleChannel* channel, uint8_t val)
 {
 	/* Write timer lo */
-	channel->timer = (channel->timer & 0x700) | val;
+	channel->timer.period = (channel->timer.period & 0x700) | val;
 }
 
 static void triangle_flags3_write(TriangleChannel* channel, uint8_t val)
 {
 	/* Write timer hi and length counter reload index */
 	/* TODO: also resets duty and starts envelope */
-	channel->timer = (channel->timer & 0xFF) | ((val & 7) << 8);
+	channel->timer.period = (channel->timer.period & 0xFF) | ((val & 7) << 8);
 	channel->lc_load = (val >> 3) & 0x1F;  /* TODO: reload directly? */
 }
 

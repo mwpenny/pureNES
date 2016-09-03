@@ -10,6 +10,9 @@ int main(int argc, char** argv)
 	SDL_Event se;
 
 	RenderSurface screen;
+
+	SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO);
+
 	renderer_init_surface(&screen, "pNES");
 
 	/*apu_genwave();*/

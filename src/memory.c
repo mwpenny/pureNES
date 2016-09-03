@@ -42,12 +42,12 @@ uint8_t memory_get(NES* nes, uint16_t addr)
 	else if (addr < 0x4000)
 		return ppu_read(&nes->ppu, addr%8 + 0x2000);
 	/* TODO: finish this / support multiple controllers and/or peripherals */
+	else if (addr == 0x4015)
+		return apu_read(&nes->apu, addr);
 	else if (addr == 0x4016)
 		return controller_read_output(&nes->c1);
-	else if (addr < 0x4018)
-		return apu_read(&nes->apu, addr);
 	/*else if (addr == 0x4017)
-		return controller_read_output(&nes->c2);
+		return controller_read_output(&nes->c2);*/
 	/* TODO: read from other areas */
 	else if (addr > 0x7FFF && addr < 0xC000)
 		return nes->game.prg_bank1[addr - 0x8000];
