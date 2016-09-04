@@ -3,6 +3,8 @@
 
 #include <SDL.h>
 
+#include "nes.h"
+#include "cpu.h"
 #include "apu.h"
 
 #ifndef M_TAU
@@ -41,11 +43,12 @@ static void audio_callback(void* userdata, uint8_t* stream, int len)
     }
 }
 
-void apu_init(APU* apu)
+void apu_init(APU* apu, NES* nes)
 {
 	SDL_AudioSpec desired, obtained;
 	memset(apu, 0, sizeof(*apu));
 	apu->sample_rate = 44100;
+	apu->nes = nes;
 
 	/* TODO: not exact? "The NES outputs ~1789773 samples a second whereas PCs
 	   typically only do 44100 (assuming 44KHz output). You essentially have to
@@ -86,8 +89,41 @@ static void pulse_step(PulseChannel* channel)
 	}
 }
 
+static void clock_quarter_frame(APU* apu)
+{
+	/* Clock envelopes and triangle linear counter */
+}
+
+static void clock_half_frame(APU* apu)
+{
+	/* Clock length counters and sweep units */
+}
+
+static uint16_t seq_step_cycles[2][5] = {
+	{7457, 14913, 22371, 29828},
+	{7457, 14913, 22371, 29829, 37281}
+};
+
 void apu_tick(APU* apu)
 {
+	if (apu->cycle == seq_step_cycles[apu->seq_mode][apu->seq_step])
+	{
+		/* Frame sequencer stages
+		   4-step     5-step       Action
+		   --------------------------------------
+		   - - - f    - - - - -    Fire interrupt
+		   - l - l    - l - - l    Clock sweep
+		   e e e e    e e e - e    Clock decay */
+		if (apu->seq_step < 3 || apu->seq_step == apu->seq_mode + 3)
+			clock_quarter_frame(apu);
+		if (apu->seq_step == 1 || apu->seq_step == apu->seq_mode + 3)
+			clock_half_frame(apu);
+		if (apu->seq_mode == 0 && apu->seq_step == 3 && apu->irq_enabled)
+			cpu_interrupt(&apu->nes->cpu, INT_IRQ);
+
+		apu->seq_step = apu->seq_step % (apu->seq_mode + 4);
+	}
+
 	/* APU runs at half speed of CPU */
 	if (apu->cycle % 2)
 	{
@@ -218,11 +254,15 @@ static uint8_t apustatus_read(APU* apu)
 
 static void apuframecnt_write(APU* apu, uint8_t val)
 {
-	apu->fc_seq_mode = (val & 0x80) != 0;
+	apu->seq_mode = (val >> 7) & 1;
+	apu->irq_enabled = (val & 0x40) == 0;
 	/* TODO:
 		Interrupt inhibit flag. If set, the frame interrupt flag is cleared, otherwise it is unaffected. 
 		After 3 or 4 CPU clock cycles*, the timer is reset.
 		If the mode flag is set, then both "quarter frame" and "half frame" signals are also generated.  */
+
+	/* TODO: If the write occurs during an APU cycle, the effects occur 3 CPU cycles after the $4017 write
+	   cycle, and if the write occurs between APU cycles, the effects occurs 4 CPU cycles after the write cycle. */
 }
 
 void apu_write(APU* apu, uint16_t addr, uint8_t val)

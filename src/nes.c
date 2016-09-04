@@ -13,7 +13,7 @@ void nes_init(NES* nes)
 	memset(nes->ram, 0, RAMSIZE);
 	cpu_init(&nes->cpu, nes);
 	ppu_init(&nes->ppu, nes);
-	apu_init(&nes->apu);
+	apu_init(&nes->apu, nes);
 	controller_kb_init(&nes->c1);
 	controller_kb_init(&nes->c2);
 }

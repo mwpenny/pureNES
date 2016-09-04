@@ -59,18 +59,22 @@ typedef struct {
 } DMCChannel;
 
 typedef struct {
+	struct NES* nes;
+
 	PulseChannel pulse1, pulse2;
 	TriangleChannel triangle;
 	NoiseChannel noise;
 	DMCChannel dmc;
 
-	uint8_t fc_seq_mode;
+	uint8_t seq_mode;
+	uint8_t seq_step;
+	uint8_t irq_enabled;
 	uint16_t sample_rate;
-	int cycle;
+	uint16_t cycle;
 } APU;
 
 void apu_genwave();
-void apu_init(APU* apu);
+void apu_init(APU* apu, struct NES* nes);
 void apu_cleanup(APU* apu);
 void apu_write(APU* apu, uint16_t addr, uint8_t val);
 uint8_t apu_read (APU* apu, uint16_t addr);

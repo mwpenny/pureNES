@@ -320,7 +320,8 @@ void ppu_write(PPU* ppu, uint16_t addr, uint8_t val)
 {
 	ppu->io_latch = val;
 
-	switch (addr) {
+	switch (addr)
+	{
 		case 0x2000:
 			ppuctrl_write(ppu, val);
 			break;
@@ -357,7 +358,8 @@ void ppu_write(PPU* ppu, uint16_t addr, uint8_t val)
 
 uint8_t ppu_read(PPU* ppu, uint16_t addr)
 {
-	switch (addr) {
+	switch (addr)
+	{
 		/* Reading from write-only registers returns open bus */
 		case 0x2000:
 		case 0x2001:

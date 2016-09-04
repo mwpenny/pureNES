@@ -867,7 +867,8 @@ static void handle_interrupt(CPU* cpu, InterruptType type)
 			break;
 		case INT_IRQ:
 			/* Don't handle interrupt if IRQs are masked */
-			if (!(cpu->p & FLAG_I)) {
+			if (!(cpu->p & FLAG_I))
+			{
 				jump_interrupt(cpu, ADDR_IRQ);
 				cpu->cycles += 7;
 			}
