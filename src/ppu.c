@@ -17,6 +17,8 @@
 #define MSTR_SLV(ppu) ((ppu->ppuctrl >> 6) & 1)
 #define NMI_ENABLED(ppu) ((ppu->ppuctrl >> 7) & 1)
 
+#define VBLANK_START(ppu) (ppu->scanline == 241 && ppu->cycle == 1)
+
 /*** PPUMASK ($2001) macros ***/
 #define GRAYSCALE(ppu) (ppu->ppumask & 1)
 #define BG_LEFT_ENALED(ppu) ((ppu->ppumask >> 1) & 1)
@@ -29,7 +31,7 @@
 #define EMPH_G(ppu) ((ppu->ppumask >> 6) & 1)
 #define EMPH_B(ppu) ((ppu->ppumask >> 7) & 1)
 
-/* TODO: Actually decode the video signal? */
+/* TODO: Actually decode the video signal? Endianness. */
 static uint32_t palette[64] =
 {
 	0x7C7C7C, 0x0000FC, 0x0000BC, 0x4428BC, 0x940084, 0xA80020, 0xA81000, 0x881400,
@@ -83,7 +85,7 @@ static uint8_t ppu_mem_read(PPU* ppu, uint16_t addr)
 		   $3F10/$3F14/$3F18/$3F1C mirror $3F00/$3F04/$3F08/$3F0C */
 		/* Necessary? */
 		if (a > 15 && (a % 4) == 0)
-			a -= 0x10;
+			a = 0;
 
 		/* Grayscale */
 		if (ppu->ppumask & 1)
@@ -128,7 +130,7 @@ static void ppu_mem_write(PPU* ppu, uint16_t addr, uint8_t val)
 		   $3F04/$3F08/$3F0C can contain unique data, but
 		   $3F10/$3F14/$3F18/$3F1C mirror $3F00/$3F04/$3F08/$3F0C */
 		if (a > 15 && (a % 4) == 0)
-			a -= 0x10;
+			a = 0;
 		ppu->pram[a] = val;
 	}
 	else
@@ -137,66 +139,53 @@ static void ppu_mem_write(PPU* ppu, uint16_t addr, uint8_t val)
 	}
 }
 
-/* Handles writes to $2000 (PPU control register) */
+/* Control register ($2000) write */
 static void ppuctrl_write(PPU* ppu, uint8_t val)
 {
-	ppu->ppuctrl = val;
-
 	/* Copy base nametable address
 	   t: ...BA.. ........ = d: ......BA */
 	ppu->t = (ppu->t & 0x73FF) | ((val & 3) << 10);
+	ppu->ppuctrl = val;
 }
 
-/* Handles writes to $2001 (PPU mask register) */
+/* Mask register ($2001) write */
 static void ppumask_write(PPU* ppu, uint8_t val)
 {
 	ppu->ppumask = val;
 }
 
-/* Handles reads from $2002 (PPU status register) */
+/* Status register ($2002) read */
 static uint8_t ppustatus_read(PPU* ppu)
 {
-	uint8_t vbl, ret;
-
-	/* Reading PPUSTATUS at the exact start of vblank will
-	   return 0 in bit 7 but clear the latch anyway,
-	   causing the program to miss frames */
-	/* TODO: macro to check vblank? */
-	if (ppu->scanline == 241 && ppu->cycle == 1)
-		vbl = 0;
-	else
-		vbl = ppu->vblank_started;
-
-	ret = (vbl << 7) |
-		  (ppu->szero_hit << 6) |
-		  (ppu->spr_overflow << 5) |
-		  (ppu->io_latch & 0x1F);
-
+	/* Reading PPUSTATUS at the exact start of vblank will return 0 in bit 7 but
+	   clear the latch anyway, causing the program to miss frames */
+	uint8_t ret = ((!VBLANK_START(ppu) && ppu->vblank_started) << 7) |
+				  (ppu->szero_hit << 6) |
+				  (ppu->spr_overflow << 5) |
+				  (ppu->io_latch & 0x1F);
 	ppu->vblank_started = 0;
 	ppu->w = 0;
-
 	return ret;
 }
 
-/* Handles writes to $2003 (OAM address port) */
+/* OAM address port ($2003) write */
 static void oamaddr_write(PPU* ppu, uint8_t val)
 {
 	ppu->oamaddr = val;
 }
 
-/* Handles reads from $2004 (OAM data port) */
+/* OAM data port ($2004) read */
 static uint8_t oamdata_read(PPU* ppu)
 {
 	/* TODO: under certain conditions, the contents of soam are returned */
 
-	/* Attempting to read during rendering returns $FF (a signal
-	   is active that makes the read always return $FF) */
+	/* Attempting to read during rendering returns $FF */
 	if (ppu->scanline < 240 && ppu->cycle > 0 && ppu->cycle < 65)
 		return 0xFF;
 	return ppu->oam[ppu->oamaddr & 0xFF];
 }
 
-/* Handles writes to $2004 (OAM data port) */
+/* OAM data port ($2004) write */
 static void oamdata_write(PPU* ppu, uint8_t val)
 {
 	/* TODO: Writes to OAMDATA during rendering (on the pre-render
@@ -221,63 +210,60 @@ static void oamdata_write(PPU* ppu, uint8_t val)
 	ppu->oam[ppu->oamaddr++] = val;
 }
 
-/* Handles writes to $2005 (PPU scrolling position register) */
+/* PPU scroll position register ($2005) write */
 static void ppuscroll_write(PPU* ppu, uint8_t val)
 {
-	if (!ppu->w) /* first write = x offset */
+	if ((ppu->w = !ppu->w))
 	{
-		/* Update coarse and fine X
+		/* First write: update coarse and fine X
 		   t: ....... ...HGFED = d: HGFED...
 		   x:              CBA = d: .....CBA */
 		ppu->t = (ppu->t & 0x7FE0) | ((val >> 3) & 0x1F);
 		ppu->x = val & 7;		
 	}
-	else		 /* second write = y offset */
+	else
 	{
-		/* Update coarse and fine Y
+		/* Second write: update coarse and fine Y
 		   t: CBA..HG FED..... = d: HGFEDCBA */
 		ppu->t = (ppu->t & 0xC1F) | ((val & 7) << 12) |
 				 ((val & 0xF8) << 2);
 	}
-
-	ppu->w = !ppu->w;
 }
 
-/* Handles writes to $2006 (PPU address register) */
+/* PPU address register ($2006) write */
 static void ppuaddr_write(PPU* ppu, uint8_t val)
 {
-	if (!ppu->w) /* first write = high byte */
+	if ((ppu->w = !ppu->w))
 	{
-		 /* t: .FEDCBA ........ = d: ..FEDCBA
+		 /* First write: copy high byte
+		    t: .FEDCBA ........ = d: ..FEDCBA
 		    t: X...... ........ = 0 */
 		ppu->t = (ppu->t & 0xFF) | ((val & 0x3F) << 8);
 	}
-	else		 /* second write = low byte */
+	else
 	{
-		/* t: ....... HGFEDCBA = d: HGFEDCBA
+		/* Second write: copy low byte
+		   t: ....... HGFEDCBA = d: HGFEDCBA
 		   v                   = t */
 		ppu->v = ppu->t = (ppu->t & 0x7F00) | val;
 	}
-
-	ppu->w = !ppu->w;
 }
 
-/* Handles reads from $2007 (PPU data port) */
+/* PPU data port ($2007) read */
 static uint8_t ppudata_read(PPU* ppu)
 {
 	uint8_t val;
 
-	/* Reading with v in [0, $3EFF] returns contents of internal buffer */
 	if (ppu->v < 0x3F00)
 	{
+		/* Reading when v is in [0, $3EFF] returns contents of internal buffer */
 		val = ppu->data_buf;
 		ppu->data_buf = ppu_mem_read(ppu, ppu->v);
 	}
-
-	/* If v is in palette range, the buffer is updated with the
-	   mirrored nametable data that would appear "underneath" the palette */
 	else
 	{
+		/* If v is in palette range, buffer is updated with mirrored nametable
+		   data that would appear "underneath" the palette */
 		val = ppu_mem_read(ppu, ppu->v);
 		ppu->data_buf = ppu_mem_read(ppu, ppu->v - 0x1000);
 	}
@@ -288,37 +274,33 @@ static uint8_t ppudata_read(PPU* ppu)
 	   
 	   Used by Young Indiana Jones Chronicles and Burai Fighter */
 
-	/* Increment VRAM address */
 	ppu->v += VADDR_INC(ppu);
-
 	return val;
 }
 
-/* Handles writes to $2007 (PPU data port) */
+/* PPU data port ($2007) write */
 static void ppudata_write(PPU* ppu, uint8_t val)
 {
-	ppu_mem_write(ppu, ppu->v, val);
-
 	/* TODO: During rendering (on the pre-render line and the visible lines 0-239,
 	   provided either background or sprite rendering is enabled),
 	   it will update v in an odd way...
 	   
 	   Used by Young Indiana Jones Chronicles and Burai Fighter */
-
-	/* Increment VRAM address */
+	ppu_mem_write(ppu, ppu->v, val);
 	ppu->v += VADDR_INC(ppu);
 }
 
-/* Handles writes to $4014 (OAM DMA register) */
+/* OAM DMA register ($4014) write */
 static void oamdma_write(PPU* ppu, uint8_t val)
 {
-	uint16_t addr = val << 8; /* $XX00 - $XXFF */
+	/* Address range = $XX00 - $XXFF */
+	uint16_t addr = val << 8;
 	uint16_t i = 0;
 
 	for (; i < 256; ++i)
 		oamdata_write(ppu, memory_get(ppu->nes, addr++));
 
-	/* TODO: clean this up */
+	/* TODO: clean this up / better implement */
 	ppu->nes->cpu.dma_cycles = 513 + ppu->nes->cpu.oddcycle;
 }
 
@@ -327,13 +309,13 @@ void ppu_init(PPU* ppu, NES* nes)
 	memset(ppu, 0, sizeof(*ppu));
 	ppu->nes = nes;
 
+	/* TODO: proper power-up state */
 	/*ppu->cycle = 340;
 	ppu->scanline = 240;*/
 }
 
 /*** PPU access via memory-mapped registers ***/
 
-/* TODO: lookup table? */
 void ppu_write(PPU* ppu, uint16_t addr, uint8_t val)
 {
 	ppu->io_latch = val;
@@ -367,6 +349,7 @@ void ppu_write(PPU* ppu, uint16_t addr, uint8_t val)
 			break;
 
 		/* Invalid address!! */
+		/* TODO: Don't silently fail like this. Should never happen though. */
 		default:
 			break;		
 	}
@@ -391,96 +374,15 @@ uint8_t ppu_read(PPU* ppu, uint16_t addr)
 			return ppudata_read(ppu);
 
 		/* Invalid address!! */
+		/* TODO: Don't silently fail like this. Should never happen though. */
 		default:
 			return 0;	
 	}
 }
 
-/*** Debug functions ***/
-void render_palettes(PPU* ppu, RenderSurface screen)
-{
-	uint8_t i = 0;
-	for (; i < 32; ++i)
-	{
-		render_pixel(screen, i, 0, palette[ppu->pram[i]]);
-	}
-
-	renderer_flip_surface(screen);
-}
-void render_nt(PPU* ppu, RenderSurface screen)
-{
-	int i = 0, row, pixel;
-	for (; i < 960; ++i)
-	{
-		uint8_t ntb = ppu_mem_read(ppu, 0x2000 + i);
-
-		for (row = 0; row < 8; ++row)
-		{
-			for (pixel = 0; pixel < 8; ++pixel)
-			{
-				uint8_t bit = 7 - pixel;
-				uint8_t mask = 1 << bit;				
-				uint8_t lb = (ppu_mem_read(ppu, BG_TBL(ppu) + (ntb*16)+row) & mask) >> bit;
-				uint8_t hb = (ppu_mem_read(ppu, BG_TBL(ppu) + (ntb*16)+row+8) & mask) >> bit;
-
-				uint8_t color = lb | (hb << 1);
-			
-				/* Donkey Kong palette 0 (for testing) */
-				switch (color)
-				{
-					case 0:
-						color = 0x0F; break;
-					case 1:
-						color = 0x15; break;
-					case 2:
-						color = 0x2C; break;
-					case 3:
-						color = 0x06; break;				
-				}
-
-				render_pixel(screen, (i%32)*8 + pixel, (i/32)*8 + row, palette[color]);
-			}
-		}
-	}
-}
-void render_oam(PPU* ppu, RenderSurface screen)
-{
-	int i = 0, row, pixel;
-	for (; i < 64; ++i)
-	{
-		for (row = 0; row < 8; ++row)
-		{
-			for (pixel = 0; pixel < 8; ++pixel)
-			{
-				uint8_t bit = 7 - pixel;
-				uint8_t mask = 1 << bit;				
-				uint8_t lb = (ppu_mem_read(ppu, SPR_TBL(ppu) + (ppu->oam[(i*4)+1]*16)+row) & mask) >> bit;
-				uint8_t hb = (ppu_mem_read(ppu, SPR_TBL(ppu) + (ppu->oam[(i*4)+1]*16)+row+8) & mask) >> bit;
-
-				uint8_t color = lb | (hb << 1);
-			
-				/* Donkey Kong palette 0 (for testing) */
-				switch (color)
-				{
-					case 0:
-						color = 0x0F; break;
-					case 1:
-						color = 0x15; break;
-					case 2:
-						color = 0x2C; break;
-					case 3:
-						color = 0x06; break;				
-				}
-
-				render_pixel(screen, (i%32)*8 + pixel, (i/32)*8 + row, palette[color]);
-			}
-		}
-	}
-}
-
 static uint8_t bg_get_tile_palette(PPU* ppu)
 {
-	/* Fetch attribute byte for current tile */
+	/* Fetch the palette attribute for the current tile */
 
 	/* Attribute table addresses are of the form
 	   NN 1111 YYY XXX
@@ -499,9 +401,9 @@ static uint8_t bg_get_tile_palette(PPU* ppu)
 	   || ++--------- Bottom left 2x2 region's palette index
 	   ++------------ Bottom right 2x2 region's palette index
 
-	   Use scroll values to isolate palette index for current tile's 2x2 tile region
+	   Use scroll values to isolate palette index for current tile's 2x2 tile region.
 
-	   Shift right 2 every 4 X tiles (right 2x2 subregions in 4x4 tile regions).
+	   Shift right 2 every 2 X tiles (right 2x2 subregions in 4x4 tile regions).
 	   Shift right 4 every 2 Y tiles (bottom 2x2 subregions in 4x4 tile regions). */
 	return (ppu_mem_read(ppu, addr) >>
 			((ppu->v & 2) | ((ppu->v >> 4) & 4))) & 3;
@@ -514,8 +416,8 @@ static uint8_t bg_get_tile_sliver(PPU* ppu, uint8_t tile, uint8_t hb)
 
 	   We're our own people, we can make our own data structures,
 	   with blackjack and hookers! */
-	uint8_t fineY = (ppu->v >> 12) & 7;
-	return ppu_mem_read(ppu, BG_TBL(ppu) + tile*16 + fineY + hb*8);
+	uint8_t y = (ppu->v >> 12) & 7;
+	return ppu_mem_read(ppu, BG_TBL(ppu) + tile*16 + y + hb*8);
 }
 
 static uint8_t spr_get_tile_sliver(PPU* ppu, uint8_t si, uint8_t hb)
@@ -544,12 +446,11 @@ static uint8_t spr_get_tile_sliver(PPU* ppu, uint8_t si, uint8_t hb)
 		if (attr & 0x80)
 			y = 15 - y;
 
-		/* Tile bit 0 is used for pattern table select.
-		   Bits 1-7 are used for the top tile number. The
-		   bottom tile is the next one in the pattern table. */
-		addr = (tile&1)*0x1000;
+		/* Tile bit 0 is used for pattern table select. Bits 1-7 are used for
+		   the top tile number. The bottom tile is next in the pattern table. */
+		addr = (tile & 1)*0x1000;
 		tile = (tile & 0xFE) + y/8;
-		y = y & 0xF7;	/* Y must be within the tile (< 8) */
+		y &= 7;
 	}
 	/* 8x8 sprites */
 	else
@@ -561,7 +462,7 @@ static uint8_t spr_get_tile_sliver(PPU* ppu, uint8_t si, uint8_t hb)
 	}
 	sliver = ppu_mem_read(ppu, addr + tile*16 + y + hb*8);
 
-	/* Horizontal flip. Swap single bits, then bit pairs, then finally nibbles */
+	/* Horizontal flip */
 	if (attr & 0x40)
 	{
 		sliver = ((sliver & 0xAA) >> 1) | ((sliver & 0x55) << 1);
@@ -573,8 +474,7 @@ static uint8_t spr_get_tile_sliver(PPU* ppu, uint8_t si, uint8_t hb)
 
 static void scroll_inc_x(PPU* ppu)
 {
-	/* Increment coarse X, switching the
-	   horizontal nametable on wraparound */
+	/* Increment coarse X, switching the horizontal nametable on wraparound */
 	if ((ppu->v & 0x1F) == 0x1F)
 		ppu->v ^= 0x41F;
 	else
@@ -596,46 +496,43 @@ static void scroll_inc_y(PPU* ppu)
 			ppu->v ^= 0x0800;
 		}
 
-		/* If coarse Y is incremented from 31, it will
-			wrap to 0, but the nametable will not switch */
+		/* If coarse Y is incremented from 31 ("out of bounds"), it will wrap
+		   to 0, but the nametable will not be switched */
 		else if (coarseY == 31)
 			ppu->v &= 0x7C1F;
 
-		/* Increment coarse Y */
+		/* Inc coarse Y */
 		else
 			ppu->v += 0x20;
 	}
 
-	/* Increment fine Y */
+	/* Inc fine Y */
 	else
 		ppu->v += 0x1000;
 }
 
 void bg_fetch_tile(PPU* ppu)
 {
-	static uint8_t nt_byte = 0, attr_byte = 0;
-	static uint32_t tile_bmap_low = 0, tile_bmap_hi = 0;
-
 	switch (ppu->cycle % 8)
 	{
 		case 1:		/* Fetch tile id from current nametable */
-			nt_byte = ppu_mem_read(ppu, 0x2000 | (ppu->v & 0xFFF));
+			ppu->nt_byte = ppu_mem_read(ppu, 0x2000 | (ppu->v & 0xFFF));
 			break;
 		case 3:		/* Fetch tile attribute */
-			attr_byte = bg_get_tile_palette(ppu);
+			ppu->attr_byte = bg_get_tile_palette(ppu);
 			break;
 		case 5:		/* Fetch low byte of tile bitmap row from pattern table */
-			tile_bmap_low = bg_get_tile_sliver(ppu, nt_byte, 0);
+			ppu->tile_bmap_low = bg_get_tile_sliver(ppu, ppu->nt_byte, 0);
 			break;
 		case 7:		/* Fetch high byte of tile bitmap row from pattern table */
-			tile_bmap_hi = bg_get_tile_sliver(ppu, nt_byte, 1);
+			ppu->tile_bmap_hi = bg_get_tile_sliver(ppu, ppu->nt_byte, 1);
 			break;
 		case 0:		/* Move data from internal latches to shift registers */
-			ppu->bg_attr1 = (ppu->bg_attr1 & 0xFF00) | ((attr_byte & 0x01) * 0xFF);
-			ppu->bg_attr2 = (ppu->bg_attr2 & 0xFF00) | (((attr_byte >> 1) & 0x01) * 0xFF);
+			ppu->bg_attr1 = (ppu->bg_attr1 & 0xFF00) | ((ppu->attr_byte & 0x01) * 0xFF);
+			ppu->bg_attr2 = (ppu->bg_attr2 & 0xFF00) | (((ppu->attr_byte >> 1) & 0x01) * 0xFF);
 
-			ppu->bg_bmp1 = (ppu->bg_bmp1 & 0xFF00) | tile_bmap_low;
-			ppu->bg_bmp2 = (ppu->bg_bmp2 & 0xFF00) | tile_bmap_hi;
+			ppu->bg_bmp1 = (ppu->bg_bmp1 & 0xFF00) | ppu->tile_bmap_low;
+			ppu->bg_bmp2 = (ppu->bg_bmp2 & 0xFF00) | ppu->tile_bmap_hi;
 
 			/* Move to next tile */
 			scroll_inc_x(ppu);
@@ -811,7 +708,6 @@ void ppu_step(PPU* ppu, RenderSurface screen)
 		if (SL_RENDER(ppu->scanline) || SL_PRERENDER(ppu->scanline))
 		{
 			/* TODO: "garbage" NT fetches used by MMC5 */
-			/* TODO: have this function return a pixel value? */
 			if (CYC_RENDER(ppu->cycle) || CYC_PREFETCH(ppu->cycle))
 			{
 				ppu->bg_attr1 <<= 1;
@@ -820,6 +716,7 @@ void ppu_step(PPU* ppu, RenderSurface screen)
 				ppu->bg_bmp1 <<= 1;
 				ppu->bg_bmp2 <<= 1;
 
+				/* TODO: have this function return a pixel value? */
 				bg_fetch_tile(ppu);
 			}
 
@@ -835,7 +732,9 @@ void ppu_step(PPU* ppu, RenderSurface screen)
 
 			/* End of line */
 			if (ppu->cycle == 256)
+			{
 				scroll_inc_y(ppu);
+			}
 			else if (ppu->cycle == 257)
 			{
 				/* Update v with horizontal data
@@ -847,7 +746,7 @@ void ppu_step(PPU* ppu, RenderSurface screen)
 		if (SL_PRERENDER(ppu->scanline) && ppu->cycle > 279 && ppu->cycle < 305)
 		{
 			/* Update v with vertical data
-			v: IHGF.ED CBA..... = t: IHGF.ED CBA..... */
+			   v: IHGF.ED CBA..... = t: IHGF.ED CBA..... */
 			ppu->v = (ppu->v & 0x41F) | (ppu->t & 0x7BE0);
 		}
 
@@ -855,12 +754,8 @@ void ppu_step(PPU* ppu, RenderSurface screen)
 			draw(ppu, screen);
 	}
 
-	/* VBLANK start */
-	if (ppu->scanline == 241 && ppu->cycle == 1)
+	if (VBLANK_START(ppu))
 	{
-		/*render_oam(ppu, screen);*/
-		/*render_nt(ppu, screen);*/
-		/*render_palettes(ppu, screen);*/
 		renderer_flip_surface(screen);
 		ppu->vblank_started = 1;
 		if (NMI_ENABLED(ppu))

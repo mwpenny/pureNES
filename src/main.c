@@ -1,4 +1,19 @@
-/* pNES */
+/*
+          ________________________
+        /               /MPMP/  / |
+       /               /----/  /  |
+      /               /----/  /  /|
+     /               /----/  /  / /
+    /               /MPMP/  /  / /
+   /________________|MPMP|_/  / /
+   | | pNES         |MPMP| | / /
+   | |______________|MPMP| |/ /
+   |________________|MPMP|_| /
+   \ o [  ][  ]     |[][]| |/
+    \_______________|MPMP|_/
+
+	Matt Penny 2015-2016
+*/
 
 #include "renderer.h"
 #include "nes.h"
@@ -15,10 +30,10 @@ int main(int argc, char** argv)
 
 	renderer_init_surface(&screen, "pNES");
 
-	/*apu_genwave();*/
 	nes_init(&nes);
 	nes_load_rom(&nes, argv[1]);
 
+	/* Here we go! */
 	for (;;)
 	{
 		nes_update(&nes, screen);

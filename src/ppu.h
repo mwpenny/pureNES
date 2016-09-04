@@ -106,6 +106,11 @@ typedef struct {
 	uint16_t cycle;
 
 	/* TODO: make everything below internal */
+	uint8_t nt_byte;
+	uint8_t attr_byte;
+	uint32_t tile_bmap_low;
+	uint32_t tile_bmap_hi;
+
 	uint8_t spr_in_range, ovr_check_done, oamend;
 
 	uint16_t bg_attr1, bg_attr2;

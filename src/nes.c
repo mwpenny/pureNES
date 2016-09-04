@@ -36,14 +36,11 @@ void nes_update(NES* nes, SDL_Surface* screen)
 
 	for (; i < ppu_cycles; ++i)
 		ppu_step(&nes->ppu, screen);
-		/*ppu_render_pattern_table(&nes->ppu, screen);*/
-		/*ppu_render_nametable(&nes->ppu, screen);*/
 
 	for (i = 0; i < ppu_cycles/3; ++i)
 		apu_tick(&nes->apu);
 
-
-	/* TODO: move this out of emulator (make emu a DLL and update controllers in front-end?) */
+	/* TODO: move this out of emulator (make a front-end which links to the emu core) */
 	controller_update(&nes->c1);
 	/*controller_update(&nes->c2);*/
 }
