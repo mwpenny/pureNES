@@ -1,8 +1,10 @@
+/* Ricoh 2A03 CPU interpreter.
+   The 2A03's CPU core is essentially a MOS 6502 with BCD mode removed */
 #include <stdio.h>
 #include <string.h>
 #include "cpu.h"
-#include "nes.h"
 #include "memory.h"
+#include "nes.h"
 
 /* Interrupt vectors */
 #define ADDR_NMI 0xFFFA
@@ -14,17 +16,14 @@
    ---- ----
    NVUB DIZC
    |||| ||||
-   |||| |||+- Carry: 1 if last addition or shift resulted in a carry, or if
-   |||| |||     last subtraction resulted in no borrow
-   |||| ||+-- Zero: 1 if last operation resulted in a 0 value
-   |||| |+--- Interrupt: Interrupt inhibit
-   |||| |       (0: /IRQ and /NMI get through; 1: only /NMI gets through)
-   |||| +---- Decimal: 1 to make ADC and SBC use binary-coded decimal arithmetic
-   ||||         (ignored on second-source 6502 like that in the NES)
-   |||+------ Break: Doesn't exist in hardware. 1 when using PHP/BRK (software interrupt)
-   ||+------- Unused: Always 1
-   |+-------- Overflow: 1 if last ADC or SBC resulted in signed overflow,
-   |            or D6 from last BIT
+   |||| |||+- Carry: Set if last addition or shift resulted in a carry, or if
+   |||| |||          last subtraction resulted in no borrow
+   |||| ||+-- Zero: Set if the result of the last operation was 0
+   |||| |+--- Interrupt mask: When set, only NMIs are handled
+   |||| +---- BCD mode enable: Unused on the 2A03
+   |||+------ Break: Set in P byte pushed by PHP/BRK (software interrupt)
+   ||+------- Unused: Set when P is pushed to the stack
+   |+-------- Overflow: Set if last operation resulted in signed overflow
    +--------- Negative: Set to bit 7 of the last operation */
 #define FLAG_C 0x01
 #define FLAG_Z 0x02
@@ -37,25 +36,21 @@
 
 static void update_flags(CPU* cpu, uint8_t val)
 {
-	/* Set/clear zero and negative flags based on result of last operation */
-	if (val)
-		cpu->p &= ~FLAG_Z;
-	else
+	/* Update zero and negative flags based on result of last operation */
+	cpu->p = (cpu->p & ~FLAG_Z & ~FLAG_N) | (val & 0x80);
+	if (!val)
 		cpu->p |= FLAG_Z;
-
-	if (val & 0x80)
-		cpu->p |= FLAG_N;
-	else
-		cpu->p &= ~FLAG_N;
 }
 
 static void stack_push(CPU* cpu, uint8_t val)
 {
+	/* Stack pointer points to an empty location */
 	memory_set(cpu->nes, 0x100 | cpu->sp--, val);
 }
 
 static void stack_push16(CPU* cpu, uint16_t val)
 {
+	/* 6502 is little-endian */
 	stack_push(cpu, (uint8_t)(val >> 8));
 	stack_push(cpu, (uint8_t)(val & 0xFF));
 }
@@ -73,312 +68,269 @@ static uint16_t stack_pop16(CPU* cpu)
 /*** CPU instructions ***/
 
 /** Status flag changes **/
-/* CLC - clear carry flag */
 static void clc(CPU* cpu)
 {
+	/* Clear carry flag */
 	cpu->p &= ~FLAG_C;
 }
-
-/* CLD - clear decimal mode flag */
 static void cld(CPU* cpu)
 {
+	/* Clear decimal mode flag */
 	cpu->p &= ~FLAG_D;
 }
-
-/* CLI - clear interrupt disable flag */
 static void cli(CPU* cpu)
 {
+	/* Clear interrupt disable flag */
 	cpu->p &= ~FLAG_I;
 }
-
-/* CLV - clear overflow flag */
 static void clv(CPU* cpu)
 {
+	/* Clear overflow flag */
 	cpu->p &= ~FLAG_V;
 }
-
-/* SEC - set carry flag */
 static void sec(CPU* cpu)
 {
+	/* Set carry flag */
 	cpu->p |= FLAG_C;
 }
-
-/* SED - set decimal mode flag */
 static void sed(CPU* cpu)
 {
+	/* Set decimal mode flag */
 	cpu->p |= FLAG_D;
 }
-
-/* SEI - set interrupt disable flag */
 static void sei(CPU* cpu)
 {
+	/* Set interrupt disable flag */
 	cpu->p |= FLAG_I;
 }
 
 /** Load/store operations **/
-/* LDA - load accumulator */
 static void lda(CPU* cpu)
 {
+	/* Load accumulator */
 	cpu->a = memory_get(cpu->nes, cpu->eff_addr);
 	update_flags(cpu, cpu->a);
 }
-
-/* LDX - load X register */
 static void ldx(CPU* cpu)
 {
+	/* Load X register */
 	cpu->x = memory_get(cpu->nes, cpu->eff_addr);
 	update_flags(cpu, cpu->x);
 }
-
-/* LDY - load Y register */
 static void ldy(CPU* cpu)
 {
+	/* Load Y register */
 	cpu->y = memory_get(cpu->nes, cpu->eff_addr);
 	update_flags(cpu, cpu->y);
 }
-
-/* STA - store accumulator */
 static void sta(CPU* cpu)
 {
+	/* Store accumulator */
 	memory_set(cpu->nes, cpu->eff_addr, cpu->a);
 }
-
-/* STX - store X register */
 static void stx(CPU* cpu)
 {
+	/* Store X register */
 	memory_set(cpu->nes, cpu->eff_addr, cpu->x);
 }
-
-/* STY - store Y register */
 static void sty(CPU* cpu)
 {
+	/* Store Y register */
 	memory_set(cpu->nes, cpu->eff_addr, cpu->y);
 }
 
 /** Register transfers **/
-/* TAX - transfer accumulator to X */
 static void tax(CPU* cpu)
 {
+	/* Transfer accumulator to X */
 	cpu->x = cpu->a;
 	update_flags(cpu, cpu->x);
 }
-
-/* TAY - transfer accumulator to Y */
 static void tay(CPU* cpu)
 {
+	/* Transfer accumulator to Y */
 	cpu->y = cpu->a;
 	update_flags(cpu, cpu->y);
 }
-
-/* TXA - transfer X to accumulator */
 static void txa(CPU* cpu)
 {
+	/* Transfer X to accumulator */
 	cpu->a = cpu->x;
 	update_flags(cpu, cpu->a);
 }
-
-/* TYA - transfer Y to accumulator */
 static void tya(CPU* cpu)
 {
+	/* Transfer Y to accumulator */
 	cpu->a = cpu->y;
 	update_flags(cpu, cpu->a);
 }
 
 /** Stack operations **/
-/* TSX - transfer stack pointer to X */
 static void tsx(CPU* cpu)
 {
+	/* Transfer stack pointer to X */
 	cpu->x = cpu->sp;
 	update_flags(cpu, cpu->x);
 }
-
-/* TXS - transfer X to stack pointer */
 static void txs(CPU* cpu)
 {
+	/* Transfer X to stack pointer */
 	cpu->sp = cpu->x;
 }
-
-/* PHA - push accumulator on stack */
 static void pha(CPU* cpu)
 {
+	/* Push accumulator on stack */
 	stack_push(cpu, cpu->a);
 }
-
-/* PHP - push processor status on stack */
 static void php(CPU* cpu)
 {
-	/* B flag set on PHP/BRK (software interrupts) */
+	/* Push processor status on stack.
+	   PHP and BRK also set the U and B flags (indicate SW interrupt) */
 	stack_push(cpu, cpu->p | FLAG_B | FLAG_U);
 }
-
-/* PLA - pull accumulator from stack */
 static void pla(CPU* cpu)
 {
+	/* Pull accumulator from stack */
 	cpu->a = stack_pop(cpu);
 	update_flags(cpu, cpu->a);
 }
-
-/* PLP - pull processor status from stack */
 static void plp(CPU* cpu)
 {
-	/* B flag doesn't exist in hardware. Don't save to register */
-	cpu->p = stack_pop(cpu) & ~FLAG_B;
+	/* Pull processor status from stack.
+	   The B and U flags don't exist in hardware, so they get unset */
+	cpu->p = stack_pop(cpu) & ~FLAG_B & ~FLAG_U;
 }
 
-/** Logical operations **/
-/* AND - logical AND with accumulator */
+/** Bitwise operations **/
 static void and(CPU* cpu)
 {
+	/* Logical AND with accumulator */
 	cpu->a &= memory_get(cpu->nes, cpu->eff_addr);
 	update_flags(cpu, cpu->a);
 }
-
-/* EOR - exclusive OR with accumulator */
 static void eor(CPU* cpu)
 {
+	/* Exclusive OR with accumulator */
 	cpu->a ^= memory_get(cpu->nes, cpu->eff_addr);
 	update_flags(cpu, cpu->a);
 }
-
-/* ORA - inclusive OR with accumulator */
 static void ora(CPU* cpu)
 {
+	/* Inclusive OR with accumulator */
 	cpu->a |= memory_get(cpu->nes, cpu->eff_addr);
 	update_flags(cpu, cpu->a);
 }
-
-/* BIT - bit test with mask pattern in accumulator */
 static void bit(CPU* cpu)
 {
-	uint8_t num = memory_get(cpu->nes, cpu->eff_addr);
-
-	/* Clear zero flag if register A has a mask bit set */
-	if (cpu->a & num)
-		cpu->p &= ~FLAG_Z;
-	else
+	/* Bit test:
+	   ANDs the memory location with A, setting the zero flag accordingly.
+	   N and V bits are copied from the memory location */
+	uint8_t val = memory_get(cpu->nes, cpu->eff_addr);
+	cpu->p = ((cpu->p & ~FLAG_Z & ~FLAG_N & ~FLAG_V) |
+			  (val & (FLAG_N | FLAG_V)));
+	if (!(cpu->a & val))
 		cpu->p |= FLAG_Z;
-
-	/* Copy N and V bits from the memory location */
-	cpu->p = (cpu->p & ~FLAG_N & ~FLAG_V) | (num & (FLAG_N | FLAG_V));
 }
 
 /** Arithmetic operations **/
-/* Addition helper function. Works with a number directly */
-static void do_add(CPU* cpu, uint8_t num)
+static void do_add(CPU* cpu, uint8_t val)
 {
-	int16_t val = cpu->a + num + (cpu->p & FLAG_C);
-	if (val > 0xFF)
+	/* Add A register and val and set flags */
+	int16_t sum = cpu->a + val + (cpu->p & FLAG_C);
+	if (sum > 0xFF)
 		cpu->p |= FLAG_C;
 	else
 		cpu->p &= ~FLAG_C;
 
-	/* Sum of 2 numbers with same sign has different sign => overflow */
-	if ((~(cpu->a ^ num) & (cpu->a ^ val)) & 0x80)
+	/* Sum has different sign than the input values: overflow has occurred */
+	if (((cpu->a ^ sum) & (val ^ sum)) & 0x80)
 		cpu->p |= FLAG_V;
 	else
 		cpu->p &= ~FLAG_V;
 
-	cpu->a = (uint8_t)val;
-	update_flags(cpu, cpu->a);
+	cpu->a = (uint8_t)sum;
+	update_flags(cpu, (uint8_t)sum);
 }
-
-/* ADC - add with carry to accumulator */
 static void adc(CPU* cpu)
 {
-	uint8_t num = memory_get(cpu->nes, cpu->eff_addr);
-	do_add(cpu, num);
+	/* Add with carry to accumulator */
+	uint8_t val = memory_get(cpu->nes, cpu->eff_addr);
+	do_add(cpu, val);
 }
-
-/* SBC - subtract with carry from accumulator */
 static void sbc(CPU* cpu)
 {
-	/* -num - 1 */
-	uint8_t num = ~memory_get(cpu->nes, cpu->eff_addr);
-	do_add(cpu, num);
+	/* Subtract with carry from accumulator:
+	   ~val = -val - 1
+	   Addition of carry bit will acount for the 1 */
+	uint8_t val = memory_get(cpu->nes, cpu->eff_addr);
+	do_add(cpu, ~val);
 }
-
 static void do_compare(CPU* cpu, uint8_t reg)
 {
-	uint8_t num = memory_get(cpu->nes, cpu->eff_addr);
-	if (num > reg)
+	uint8_t val = memory_get(cpu->nes, cpu->eff_addr);
+	if (val > reg)
 		cpu->p &= ~FLAG_C;
 	else
 		cpu->p |= FLAG_C;
-	update_flags(cpu, reg - num);
+	update_flags(cpu, reg - val);
 }
-
-/* CMP - compare with accumulator */
 static void cmp(CPU* cpu)
 {
+	/* Compare with accumulator */
 	do_compare(cpu, cpu->a);
 }
-
-/* CPX - compare with X register */
 static void cpx(CPU* cpu)
 {
+	/* Compare with X register */
 	do_compare(cpu, cpu->x);
 }
-
-/* CPY - compare with Y register */
 static void cpy(CPU* cpu)
 {
+	/* Compare with Y register */
 	do_compare(cpu, cpu->y);
 }
-
-/** Increments and decrements **/
-/* INC - increment value at memory location */
 static void inc(CPU* cpu)
 {
-	uint8_t val = memory_get(cpu->nes, cpu->eff_addr)+1;
+	/* Increment value at memory location */
+	uint8_t val = memory_get(cpu->nes, cpu->eff_addr) + 1;
 	memory_set(cpu->nes, cpu->eff_addr, val);
 	update_flags(cpu, val);
 }
-
-/* INX - increment X register */
 static void inx(CPU* cpu)
 {
-	++cpu->x;
-	update_flags(cpu, cpu->x);
+	/* Increment X register */
+	update_flags(cpu, ++cpu->x);
 }
-
-/* INY - increment Y register */
 static void iny(CPU* cpu)
 {
-	++cpu->y;
-	update_flags(cpu, cpu->y);
+	/* Increment Y register */
+	update_flags(cpu, ++cpu->y);
 }
-
-/* DEC - decrement memory location */
 static void dec(CPU* cpu)
 {
-	uint8_t val = memory_get(cpu->nes, cpu->eff_addr)-1;
+	/* Decrement memory location */
+	uint8_t val = memory_get(cpu->nes, cpu->eff_addr) - 1;
 	memory_set(cpu->nes, cpu->eff_addr, val);
 	update_flags(cpu, val);
 }
-
-/* DEX - decrement X register */
 static void dex(CPU* cpu)
 {
-	--cpu->x;
-	update_flags(cpu, cpu->x);
+	/* Decrement X register */
+	update_flags(cpu, --cpu->x);
 }
-
-/* DEY - decrement Y register */
 static void dey(CPU* cpu)
 {
-	--cpu->y;
-	update_flags(cpu, cpu->y);
+	/* Decrement Y register */
+	update_flags(cpu, --cpu->y);
 }
 
 /** Shifts **/
-static uint8_t get_shift_num(CPU* cpu)
+static uint8_t get_shifting_val(CPU* cpu)
 {
 	if (cpu->instr_amode == AMODE_ACC)
 		return cpu->a;
-	else
-		return memory_get(cpu->nes, cpu->eff_addr);
+	return memory_get(cpu->nes, cpu->eff_addr);
 }
-
 static void store_shift_result(CPU* cpu, uint8_t num)
 {
 	if (cpu->instr_amode == AMODE_ACC)
@@ -386,47 +338,43 @@ static void store_shift_result(CPU* cpu, uint8_t num)
 	else
 		memory_set(cpu->nes, cpu->eff_addr, num);
 }
-
-/* ASL - arithmetic shift left */
 static void asl(CPU* cpu)
 {
-	/* C <- num <- 0 */
-	uint8_t num = get_shift_num(cpu);
+	/* Arithmetic shift left:
+	   C <- num <- 0 */
+	uint8_t num = get_shifting_val(cpu);
 	cpu->p = (cpu->p & ~FLAG_C) | ((num >> 7) & 0x01);
 	num <<= 1;
 	update_flags(cpu, num);
 	store_shift_result(cpu, num);
 }
-
-/* LSR - logical shift right */
 static void lsr(CPU* cpu)
 {
-	/* 0 -> num -> C */
-	uint8_t num = get_shift_num(cpu);
+	/* Logical shift right:
+	   0 -> num -> C */
+	uint8_t num = get_shifting_val(cpu);
 	cpu->p = (cpu->p & ~FLAG_C) | (num & 0x01);
 	num >>= 1;
 	update_flags(cpu, num);
 	store_shift_result(cpu, num);
 }
-
-/* ROL - rotate left */
 static void rol(CPU* cpu)
 {
-	/* C <- num <- C */
-	uint8_t num = get_shift_num(cpu);
-	uint8_t carry = cpu->p & FLAG_C;
+	/* Rotate left:
+	   C <- num <- C */
+	uint8_t num = get_shifting_val(cpu);
+	uint8_t carry = (cpu->p & FLAG_C);
 	cpu->p = (cpu->p & ~FLAG_C) | ((num >> 7) & 0x01);
 	num = (num << 1) | carry;
 	update_flags(cpu, num);
 	store_shift_result(cpu, num);
 }
-
-/* ROR - rotate right */
 static void ror(CPU* cpu)
 {
-	/* C -> num -> C */
-	uint8_t num = get_shift_num(cpu);
-	uint8_t carry = cpu->p & FLAG_C;
+	/* Rotate right:
+	   C -> num -> C */
+	uint8_t num = get_shifting_val(cpu);
+	uint8_t carry = (cpu->p & FLAG_C);
 	cpu->p = (cpu->p & ~FLAG_C) | (num & FLAG_C);
 	num = (carry << 7) | (num >> 1);
 	update_flags(cpu, num);
@@ -434,24 +382,20 @@ static void ror(CPU* cpu)
 }
 
 /** Jumps and calls **/
-/* JMP - jump to location */
 static void jmp(CPU* cpu)
 {
+	/* Jump to location */
 	cpu->pc = cpu->eff_addr;
 }
-
-/* JSR - jump to subroutine */
 static void jsr(CPU* cpu)
 {
-	/* Push PC onto the stack */
-	stack_push16(cpu, cpu->pc-1);
+	/* Push PC onto the stack and jump to the subroutine */
+	stack_push16(cpu, cpu->pc - 1);
 	cpu->pc = cpu->eff_addr;
 }
-
-/* RTS - return from subroutine */
 static void rts(CPU* cpu)
 {
-	/* Pull PC off the stack */
+	/* Pull PC off the stack and jump to the return address */
 	cpu->pc = stack_pop16(cpu) + 1;
 }
 
@@ -466,59 +410,51 @@ static void do_branch(CPU* cpu)
 	cpu->pc = cpu->eff_addr;
 	++cpu->cycles;
 }
-
-/* BCC - branch if carry flag clear */
 static void bcc(CPU* cpu)
 {
+	/* Branch if carry flag clear */
 	if (!(cpu->p & FLAG_C))
 		do_branch(cpu);
 }
-
-/* BCS - branch if carry flag set */
 static void bcs(CPU* cpu)
 {
+	/* Branch if carry flag set */
 	if (cpu->p & FLAG_C)
 		do_branch(cpu);
 }
-
-/* BEQ - branch if zero flag set */
 static void beq(CPU* cpu)
 {
+	/* Branch if zero flag set */
 	if (cpu->p & FLAG_Z)
 		do_branch(cpu);
 }
-
-/* BMI - branch if negative flag set */
 static void bmi(CPU* cpu)
 {
+	/* Branch if negative flag set */
 	if (cpu->p & FLAG_N)
 		do_branch(cpu);
 }
-
-/* BNE - branch if zero flag clear */
 static void bne(CPU* cpu)
 {
+	/* Branch if zero flag clear */
 	if (!(cpu->p & FLAG_Z))
 		do_branch(cpu);
 }
-
-/* BPL - branch if negative flag clear */
 static void bpl(CPU* cpu)
 {
+	/* Branch if negative flag clear */
 	if (!(cpu->p & FLAG_N))
 		do_branch(cpu);
 }
-
-/* BVC - branch if overflow flag clear */
 static void bvc(CPU* cpu)
 {
+	/* Branch if overflow flag clear */
 	if (!(cpu->p & FLAG_V))
 		do_branch(cpu);
 }
-
-/* BVC - branch if overflow flag set */
 static void bvs(CPU* cpu)
 {
+	/* Branch if overflow flag set */
 	if (cpu->p & FLAG_V)
 		do_branch(cpu);
 }
@@ -526,175 +462,144 @@ static void bvs(CPU* cpu)
 /** System instructions **/
 static void jump_interrupt(CPU* cpu, uint16_t vector)
 {
+	uint8_t flags = cpu->p | FLAG_U;
+	if (vector == ADDR_IRQ)
+		flags |= FLAG_B;  /* B flag set on SW interrupts */
 	stack_push16(cpu, cpu->pc);
-	php(cpu);
-	cpu->p |= FLAG_I;
+	stack_push(cpu, flags);
+	cpu->p |= FLAG_I;  /* Mask interrupts while handling this one */
 	cpu->pc = memory_get16(cpu->nes, vector);
 }
-
-/* BRK - software interrupt */
 static void brk(CPU* cpu)
 {
-	/*TODO: brk apparently (sort of) HAS AN OPERAND (second byte is padding)*/
+	/* Software interrupt */
 	jump_interrupt(cpu, ADDR_IRQ);
 }
-
-/* NOP - no operation */
 static void nop(CPU* cpu) {}
-
-/* RTI - return from interrupt */
 static void rti(CPU* cpu)
 {
+	/* Return from interrupt */
 	plp(cpu);
-	cpu->p &= ~FLAG_B; /* B flag only set on stack */
+	cpu->p &= ~FLAG_B;  /* B flag only set on stack */
 	cpu->pc = stack_pop16(cpu);
 }
 
 /** Illegal instructions **/
-/* TODO: warn if these are used!! */
-/* AHX - store A & X & (addr high byte plus 1) at addr */
 static void ahx(CPU* cpu)
 {
-	memory_set(cpu->nes, cpu->eff_addr, cpu->a & cpu->x & ((cpu->eff_addr >> 8) + 1));
+	/* Store A & X & (addr high byte plus 1) at addr */
+	uint8_t val = cpu->a & cpu->x & ((cpu->eff_addr >> 8) + 1);
+	memory_set(cpu->nes, cpu->eff_addr, val);
 }
-
-/* ALR - AND + LSR */
 static void alr(CPU* cpu)
 {
 	and(cpu);
 	lsr(cpu);
 }
-
-/* ANC - AND + set carry bit if result is negative */
 static void anc(CPU* cpu)
 {
+	/* AND + set carry bit if result is negative */
 	and(cpu);
 	if (cpu->a & 0x80)
 		cpu->p |= FLAG_C;
 	else
 		cpu->p &= ~FLAG_C;
 }
-
-/* ARR - similar to AND + ROR. AND byte with A, V = A.5 XOR A.6,
-   swap C and A.6, then finally shift A right (bit 0 is lost) */
 static void arr(CPU* cpu)
 {
+	/* Similar to AND + ROR. AND byte with A, V = A.5 XOR A.6,
+       swap C and A.6, then finally shift A right (bit 0 is lost) */
 	uint8_t xor, b6;
 	uint8_t carry = cpu->p & FLAG_C;
-	cpu->a &= memory_get(cpu->nes, cpu->eff_addr);
 
+	cpu->a &= memory_get(cpu->nes, cpu->eff_addr);
 	b6 = (cpu->a >> 6) & 0x01;
 	xor = (b6 ^ (cpu->a >> 5)) & 0x01;
 	cpu->p = (cpu->p & ~FLAG_V & ~FLAG_C) | (xor << 6) | b6;
 	cpu->a = (carry << 7) | (cpu->a >> 1);
 	update_flags(cpu, cpu->a);
 }
-
-/* AXS - subtract byte from A & X and store in X */
 static void axs(CPU* cpu)
 {
-	uint8_t num = (cpu->a & cpu->x);
-	cpu->x = num - memory_get(cpu->nes, cpu->eff_addr);
-	do_compare(cpu, num);
+	/* Subtract byte from A & X and store in X */
+	uint8_t val = (cpu->a & cpu->x) - memory_get(cpu->nes, cpu->eff_addr);
+	cpu->x = val;
+	do_compare(cpu, val);
 }
-
-/* DCP - DEC + CMP */
 static void dcp(CPU* cpu)
 {
 	dec(cpu);
 	cmp(cpu);
 }
-
-/* ISC - INC + SBC */
 static void isc(CPU* cpu)
 {
 	inc(cpu);
 	sbc(cpu);
 }
-
-/* KIL - crash the processor */
 static void kil(CPU* cpu)
 {
+	/* Crash the processor */
 	cpu->is_running = 0;
 }
-
-/* LAS - A = X = SP = value & SP */
 static void las(CPU* cpu)
 {
+	/* A = X = SP = value & SP */
 	uint8_t val = memory_get(cpu->nes, cpu->eff_addr) & cpu->sp;
 	cpu->a = cpu->x = cpu->sp = val;
 	update_flags(cpu, val);
 }
-
-/* LAX - LDA + LDX */
 static void lax(CPU* cpu)
 {
 	lda(cpu);
 	ldx(cpu);
 }
-
-/* RLA - ROL + AND */
 static void rla(CPU* cpu)
 {
 	rol(cpu);
 	and(cpu);
 }
-
-/* RRA - ROR + ADC */
 static void rra(CPU* cpu)
 {
 	ror(cpu);
 	adc(cpu);
 }
-
-/* SAX - store A & X at memory location */
 static void sax(CPU* cpu)
 {
+	/* Store A & X at memory location */
 	memory_set(cpu->nes, cpu->eff_addr, cpu->a & cpu->x);
 }
-
-/* SHX - store X & (addr high byte plus 1) at addr */
 static void shx(CPU* cpu)
 {
+	/* Store X & (addr high byte plus 1) at addr */
 	memory_set(cpu->nes, cpu->eff_addr, cpu->x & ((cpu->eff_addr >> 8) + 1));
 }
-
-/* SHY - store Y & (addr high byte plus 1) at addr */
 static void shy(CPU* cpu)
 {
+	/* Store Y & (addr high byte plus 1) at addr */
 	memory_set(cpu->nes, cpu->eff_addr, cpu->y & ((cpu->eff_addr >> 8) + 1));
 }
-
-/* SLO - ASL + ORA */
 static void slo(CPU* cpu)
 {
 	asl(cpu);
 	ora(cpu);
 }
-
-/* SRE - LSR + EOR */
 static void sre(CPU* cpu)
 {
 	lsr(cpu);
 	eor(cpu);
 }
-
-/* TAS - store A & X in SP, store result & (addr high byte plus 1) at addr */
 static void tas(CPU* cpu)
 {
+	/* Store A & X in SP, store result & (addr high byte plus 1) at addr */
 	cpu->sp = cpu->a & cpu->x;
 	memory_set(cpu->nes, cpu->eff_addr, cpu->sp & ((cpu->eff_addr >> 8) + 1));
 }
-
-/* XAA - TXA + AND */
 void xaa(CPU* cpu)
 {
-	/* TODO: highly unstable (use magic) */
-	txa(cpu);
-	and(cpu);
+	/* Similar to TXA + AND, but unstable due to analog feedback */
+	cpu->a = (cpu->a | 0xEE) & cpu->x & memory_get(cpu->nes, cpu->eff_addr);
 }
 
-/*** Lookup tables ***/
 static char* instr_names[256] =
 {
 	"BRK", "ORA", "KIL", "SLO", "NOP", "ORA", "ASL", "SLO",
@@ -730,7 +635,6 @@ static char* instr_names[256] =
 	"BEQ", "SBC", "KIL", "ISC", "NOP", "SBC", "INC", "ISC",
 	"SED", "SBC", "NOP", "ISC", "NOP", "SBC", "INC", "ISC"
 };
-
 static void (*instructions[256])(CPU* cpu) =
 {
 	brk, ora, kil, slo, nop, ora, asl, slo, php, ora, asl, anc, nop, ora, asl, slo,
@@ -750,7 +654,6 @@ static void (*instructions[256])(CPU* cpu) =
 	cpx, sbc, nop, isc, cpx, sbc, inc, isc, inx, sbc, nop, sbc, cpx, sbc, inc, isc,
 	beq, sbc, kil, isc, nop, sbc, inc, isc, sed, sbc, nop, isc, nop, sbc, inc, isc
 };
-
 static AddressingMode amodes[256] =
 {
 	AMODE_IMP, AMODE_XID, AMODE_IMP, AMODE_XID, AMODE_ZPG, AMODE_ZPG, AMODE_ZPG, AMODE_ZPG,
@@ -786,7 +689,6 @@ static AddressingMode amodes[256] =
 	AMODE_REL, AMODE_IDY, AMODE_IMP, AMODE_IDY, AMODE_ZPX, AMODE_ZPX, AMODE_ZPX, AMODE_ZPX,
 	AMODE_IMP, AMODE_ABY, AMODE_IMP, AMODE_ABY, AMODE_ABX, AMODE_ABX, AMODE_ABX, AMODE_ABX
 };
-
 static uint8_t instr_cycles[256] =
 {
 	7, 6, 0, 8, 3, 3, 5, 5, 3, 2, 2, 2, 4, 4, 6, 6,
@@ -806,8 +708,6 @@ static uint8_t instr_cycles[256] =
 	2, 6, 2, 8, 3, 3, 5, 5, 2, 2, 2, 2, 4, 4, 6, 6,
 	2, 5, 0, 8, 4, 4, 6, 6, 2, 4, 2, 7, 4, 4, 7, 7
 };
-
-/* TODO: update for illegal ops */
 static uint8_t pagecross_cycles[256] =
 {
 	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -831,7 +731,7 @@ static uint8_t pagecross_cycles[256] =
 void cpu_init(CPU* cpu, NES* nes)
 {
 	memset(cpu, 0, sizeof(*cpu));
-	cpu->nes = nes; /* set parent system */
+	cpu->nes = nes;
 }
 
 void cpu_reset(CPU* cpu)
@@ -840,17 +740,15 @@ void cpu_reset(CPU* cpu)
 	cpu->p |= FLAG_I;
 	cpu->pc = memory_get16(cpu->nes, ADDR_RESET);
 	cpu->is_running = 1;
-	/* after reset, APU is silenced */
+	/* TODO: after reset, APU is silenced */
 }
 
 void cpu_power(CPU* cpu)
 {
-	cpu->p = FLAG_U;
+	cpu->p = FLAG_I;
 	cpu->a = cpu->x = cpu->y = 0;
 	cpu->sp = 0;
 	cpu_reset(cpu);
-
-	/* TODO: init memory? */
 }
 
 static void handle_interrupt(CPU* cpu, InterruptType type)
@@ -866,7 +764,7 @@ static void handle_interrupt(CPU* cpu, InterruptType type)
 			cpu->cycles += 7;
 			break;
 		case INT_IRQ:
-			/* Don't handle interrupt if IRQs are masked */
+			/* Don't handle IRQs if they are masked */
 			if (!(cpu->p & FLAG_I))
 			{
 				jump_interrupt(cpu, ADDR_IRQ);
@@ -874,85 +772,87 @@ static void handle_interrupt(CPU* cpu, InterruptType type)
 			}
 			break;
 	}
-
 	cpu->last_int = INT_NONE;
 }
 
-static void update_eff_addr_abs_indexed(CPU* cpu, uint8_t i)
+static uint8_t get_pagecross_penalty(CPU* cpu, uint16_t oldaddr)
 {
-	/* Use the the next two bytes plus the value passed to get effective address */
-	uint16_t addr = memory_get16(cpu->nes, cpu->pc++);
-	++cpu->pc; /* for fecthing second byte */
-	cpu->eff_addr = addr + i;
+	/* Some instructions incur a cycle penalty if the new, offset effective
+	   address is on a different page than the old one */
+	if ((oldaddr & 0xFF00) != (cpu->eff_addr & 0xFF00))
+		return pagecross_cycles[cpu->opcode];
+	return 0;
+}
 
-	/* Page cross cycle penalty */
-	if ((addr & 0xFF00) != (cpu->eff_addr & 0xFF00))
-		cpu->cycles += pagecross_cycles[cpu->opcode];
+static void set_eff_addr_abs_indexed(CPU* cpu, uint8_t val)
+{
+	/* Use the the next two bytes + the value passed to get effective address */
+	uint16_t addr = memory_get16(cpu->nes, cpu->pc++);
+	++cpu->pc;
+	cpu->eff_addr = addr + val;
+	cpu->cycles += get_pagecross_penalty(cpu, addr);
 }
 
 static void update_eff_addr(CPU* cpu)
 {
 	switch (cpu->instr_amode)
 	{
-		/* Instructions with these addressing modes don't get values from memory */
+		/* Accumulator and implied addressing don't touch memory */
 		case AMODE_ACC:
 		case AMODE_IMP:
 			cpu->eff_addr = 0;
 			break;
 
-		/* Immediate addressing => Next byte is value */
+		/* Immediate addressing: next byte is value */
 		case AMODE_IMM:
 			cpu->eff_addr = cpu->pc++;
 			break;
 
-		/* Zero page addressing => Value of next byte equals address */
+		/* Zero page addressing: effective address is the next byte */
 		case AMODE_ZPG:
-			cpu->eff_addr = memory_get(cpu->nes, cpu->pc++) & 0xFF;
+			cpu->eff_addr = memory_get(cpu->nes, cpu->pc++);
 			break;
 
-		/* Zero page, X addressing => Value of next byte plus the
-		   value in X equals address */
+		/* Zero page, X addressing: effective address is the next byte + X */
 		case AMODE_ZPX:
 			cpu->eff_addr = (memory_get(cpu->nes, cpu->pc++) + cpu->x) & 0xFF;
 			break;
 
-		/* Zero page, Y addressing => Value of next byte plus the value
-		   in Y equals address */
+		/* Zero page, X addressing: effective address is the next byte + Y */
 		case AMODE_ZPY:
 			cpu->eff_addr = (memory_get(cpu->nes, cpu->pc++) + cpu->y) & 0xFF;
 			break;
 
-		/* Relative addressing => PC plus the value of the next byte equals address */
+		/* Relative addressing: effective address is PC + the next byte */
 		case AMODE_REL:
 			cpu->eff_addr = (int8_t)memory_get(cpu->nes, cpu->pc++) + cpu->pc;
 			break;
 
-		/* Absolute addressing => Value of next two bytes equal address */
+		/* Absolute addressing: the effective address is the next two bytes */
 		case AMODE_ABS:
 			cpu->eff_addr = memory_get16(cpu->nes, cpu->pc++);
-			++cpu->pc; /* for fetching second byte */
+			++cpu->pc;
 			break;
 
-		/* Absolute, X addressing => Value of next two bytes plus value in X
-		   equals address */
+		/* Absolute, X addressing: effective address is the next 2 bytes + X */
 		case AMODE_ABX:
-			update_eff_addr_abs_indexed(cpu, cpu->x);
+			set_eff_addr_abs_indexed(cpu, cpu->x);
 			break;
 
-		/* Absolute, X addressing => Value of next two bytes plus value in Y
-		   equals address */
+		/* Absolute, Y addressing: effective address is the next 2 bytes + Y */
 		case AMODE_ABY:
-			update_eff_addr_abs_indexed(cpu, cpu->y);
+			set_eff_addr_abs_indexed(cpu, cpu->y);
 			break;
 
-		/* Indirect addressing => Address pointed to by the next 2 bytes equals address */
+		/* Indirect addressing: effective address is pointed to
+		   by the next 2 bytes */
 		case AMODE_IND:
 			cpu->eff_addr = memory_get16_ind(cpu->nes, memory_get16(cpu->nes, cpu->pc++));
-			++cpu->pc; /* for fetching pointer high byte */
+			++cpu->pc;
 			break;
 
-		/* Indexed indirect addressing => Address pointed to by X plus value of next byte
-		   equals address */
+		/* Indexed indirect addressing: effecive address is pointed
+		   to by X + the next byte */
 		case AMODE_XID:
 		{
 			uint8_t ptr = (memory_get(cpu->nes, cpu->pc++) + cpu->x) & 0xFF;
@@ -960,64 +860,79 @@ static void update_eff_addr(CPU* cpu)
 			break;
 		}
 
-		/* Indirect indexed addressing => Y plus address pointed to by value of next byte */
+		/* Indirect indexed addressing: effective address is Y + address
+		   pointed to by next byte */
 		case AMODE_IDY:
 		{
 			uint16_t ptr = memory_get16_ind(cpu->nes, memory_get(cpu->nes, cpu->pc++) & 0xFF);
 			cpu->eff_addr = ptr + cpu->y;
-
-			/* Page cross cycle penalty */
-			if ((ptr & 0xFF00) != (cpu->eff_addr & 0xFF00))
-				cpu->cycles += pagecross_cycles[cpu->opcode];
+			cpu->cycles += get_pagecross_penalty(cpu, ptr);
 			break;
 		}
 	}
 }
 
-#include <stdio.h>
-int cpu_step(CPU* cpu)
+/*#include <stdio.h>*/
+uint16_t cpu_step(CPU* cpu)
 {
 	static int occount = 0;
 	/*static FILE* log;*/
 
-	cpu->cycles = 0;
-
-	if (cpu->dma_cycles)
+	uint16_t old_cycles = cpu->cycles;
+	if (cpu->idle_cycles)
 	{
-		--cpu->dma_cycles;
+		--cpu->idle_cycles;
 		return 1;
 	}
 
-	if (cpu->last_int != INT_NONE) {
+	/*if (cpu->oam_dma_started)
+	{
+		uint8_t val = memory_get(cpu->nes, cpu->oam_dma_addr++);
+		ppu_oamdata_write(&cpu->nes->ppu, val);
+		if (++cpu->oam_dma_bytes_copied == 0)
+			cpu->oam_dma_started = 0;
+		return 1;
+	}*/
+
+	if (cpu->last_int != INT_NONE)
+	{
 		handle_interrupt(cpu, cpu->last_int);
-		return cpu->cycles;
 	}
+	else
+	{
+		/*log = fopen("cpu.log", "a");*/
 
-	/*log = fopen("cpu.log", "a");*/
+		cpu->opcode = memory_get(cpu->nes, cpu->pc++);
+		cpu->instr_amode = amodes[cpu->opcode];
+		/*printf("%X\t%s ", cpu->pc-1, instr_names[cpu->opcode]);
+		/*fprintf(log, "%X\t%s ", cpu->pc-1, instr_names[cpu->opcode]);*/
+		update_eff_addr(cpu);
+		/*fprintf(log, "PC:%x\tOPCODE:%s\tOPERAND:%x\tBYTES:%x\n", cpu->pc, instr_names[oci.opcode], oci.operand, instr_cycles[oci.opcode]);*/
+		/*fprintf(log, "$%.4x\t\t\t", cpu->eff_addr);*/
+		/*printf("$%.4x\t\t\t", cpu->eff_addr);
+		printf("A:%.2X X:%.2X Y:%.2X P:%.2X SP:%.2X\n", cpu->a, cpu->x, cpu->y, cpu->p, cpu->sp);
 
-	cpu->opcode = memory_get(cpu->nes, cpu->pc++);
-	cpu->instr_amode = amodes[cpu->opcode];
-	/*printf("%X\t%s ", cpu->pc-1, instr_names[cpu->opcode]);
-	/*fprintf(log, "%X\t%s ", cpu->pc-1, instr_names[cpu->opcode]);*/
-	update_eff_addr(cpu);
-	/*fprintf(log, "PC:%x\tOPCODE:%s\tOPERAND:%x\tBYTES:%x\n", cpu->pc, instr_names[oci.opcode], oci.operand, instr_cycles[oci.opcode]);*/
-	/*fprintf(log, "$%.4x\t\t\t", cpu->eff_addr);*/
-	/*printf("$%.4x\t\t\t", cpu->eff_addr);
-	printf("A:%.2X X:%.2X Y:%.2X P:%.2X SP:%.2X\n", cpu->a, cpu->x, cpu->y, cpu->p, cpu->sp);
+		/*fprintf(log, "A:%.2X X:%.2X Y:%.2X P:%.2X SP:%.2X\n", cpu->a, cpu->x, cpu->y, cpu->p, cpu->sp);
+		fclose(log);*/
 
-	/*fprintf(log, "A:%.2X X:%.2X Y:%.2X P:%.2X SP:%.2X\n", cpu->a, cpu->x, cpu->y, cpu->p, cpu->sp);
-	fclose(log);*/
-
-	cpu->cycles = instr_cycles[cpu->opcode];
-
-	/* Used for adding another cycle during DMA writes */
-	cpu->oddcycle = (cpu->oddcycle ^ cpu->cycles%2);
-
-	instructions[cpu->opcode](cpu);
-	return cpu->cycles;
+		cpu->cycles += instr_cycles[cpu->opcode];
+		instructions[cpu->opcode](cpu);
+	}
+	return (cpu->cycles - old_cycles);  /* Cycles taken */
 }
 
 void cpu_interrupt(CPU* cpu, InterruptType type)
 {
 	cpu->last_int = type;
 }
+
+/*void cpu_begin_oam_dma(CPU* cpu, uint16_t addr_start)
+{
+	if (!cpu->oam_dma_started)
+	{
+		cpu->oam_dma_started = 1;
+		cpu->oam_dma_addr = addr_start;
+		cpu->idle_cycles += 1 + (cpu->cycles & 1);
+		cpu->oam_dma_bytes_copied = 0;
+	}
+}*/
