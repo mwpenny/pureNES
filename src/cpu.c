@@ -751,30 +751,6 @@ void cpu_power(CPU* cpu)
 	cpu_reset(cpu);
 }
 
-static void handle_interrupt(CPU* cpu, InterruptType type)
-{
-	/* Set jump address to interrupt handler */
-	switch (type)
-	{
-		case INT_RESET:
-			cpu_reset(cpu);
-			break;
-		case INT_NMI:
-			jump_interrupt(cpu, ADDR_NMI);
-			cpu->cycles += 7;
-			break;
-		case INT_IRQ:
-			/* Don't handle IRQs if they are masked */
-			if (!(cpu->p & FLAG_I))
-			{
-				jump_interrupt(cpu, ADDR_IRQ);
-				cpu->cycles += 7;
-			}
-			break;
-	}
-	cpu->last_int = INT_NONE;
-}
-
 static uint8_t get_pagecross_penalty(CPU* cpu, uint16_t oldaddr)
 {
 	/* Some instructions incur a cycle penalty if the new, offset effective
@@ -894,36 +870,48 @@ uint16_t cpu_step(CPU* cpu)
 		return 1;
 	}*/
 
-	if (cpu->last_int != INT_NONE)
+	/* Service pending interrupts */
+	if (cpu->pending_interrupts & INT_RST)
 	{
-		handle_interrupt(cpu, cpu->last_int);
+		cpu->pending_interrupts &= ~INT_RST;
+		cpu_reset(cpu);
 	}
-	else
+	else if (cpu->pending_interrupts & INT_NMI)
 	{
-		/*log = fopen("cpu.log", "a");*/
-
-		cpu->opcode = memory_get(cpu->nes, cpu->pc++);
-		cpu->instr_amode = amodes[cpu->opcode];
-		/*printf("%X\t%s ", cpu->pc-1, instr_names[cpu->opcode]);
-		/*fprintf(log, "%X\t%s ", cpu->pc-1, instr_names[cpu->opcode]);*/
-		update_eff_addr(cpu);
-		/*fprintf(log, "PC:%x\tOPCODE:%s\tOPERAND:%x\tBYTES:%x\n", cpu->pc, instr_names[oci.opcode], oci.operand, instr_cycles[oci.opcode]);*/
-		/*fprintf(log, "$%.4x\t\t\t", cpu->eff_addr);*/
-		/*printf("$%.4x\t\t\t", cpu->eff_addr);
-		printf("A:%.2X X:%.2X Y:%.2X P:%.2X SP:%.2X\n", cpu->a, cpu->x, cpu->y, cpu->p, cpu->sp);
-
-		/*fprintf(log, "A:%.2X X:%.2X Y:%.2X P:%.2X SP:%.2X\n", cpu->a, cpu->x, cpu->y, cpu->p, cpu->sp);
-		fclose(log);*/
-
-		cpu->cycles += instr_cycles[cpu->opcode];
-		instructions[cpu->opcode](cpu);
+		cpu->pending_interrupts &= ~INT_NMI;
+		jump_interrupt(cpu, ADDR_NMI);
+		cpu->cycles += 7;
 	}
+	else if ((cpu->pending_interrupts & INT_IRQ) && !(cpu->p & FLAG_I))
+	{
+		cpu->pending_interrupts &= ~INT_IRQ;
+		jump_interrupt(cpu, ADDR_IRQ);
+		cpu->cycles += 7;
+	}
+
+	/*log = fopen("cpu.log", "a");*/
+
+	cpu->opcode = memory_get(cpu->nes, cpu->pc++);
+	cpu->instr_amode = amodes[cpu->opcode];
+	/*printf("%X\t%s ", cpu->pc-1, instr_names[cpu->opcode]);
+	/*fprintf(log, "%X\t%s ", cpu->pc-1, instr_names[cpu->opcode]);*/
+	update_eff_addr(cpu);
+	/*fprintf(log, "PC:%x\tOPCODE:%s\tOPERAND:%x\tBYTES:%x\n", cpu->pc, instr_names[oci.opcode], oci.operand, instr_cycles[oci.opcode]);*/
+	/*fprintf(log, "$%.4x\t\t\t", cpu->eff_addr);*/
+	/*printf("$%.4x\t\t\t", cpu->eff_addr);
+	printf("A:%.2X X:%.2X Y:%.2X P:%.2X SP:%.2X\n", cpu->a, cpu->x, cpu->y, cpu->p, cpu->sp);
+
+	/*fprintf(log, "A:%.2X X:%.2X Y:%.2X P:%.2X SP:%.2X\n", cpu->a, cpu->x, cpu->y, cpu->p, cpu->sp);
+	fclose(log);*/
+
+	cpu->cycles += instr_cycles[cpu->opcode];
+	instructions[cpu->opcode](cpu);
 	return (cpu->cycles - old_cycles);  /* Cycles taken */
 }
 
-void cpu_interrupt(CPU* cpu, InterruptType type)
+void cpu_interrupt(CPU* cpu, uint8_t type)
 {
-	cpu->last_int = type;
+	cpu->pending_interrupts |= type;
 }
 
 /*void cpu_begin_oam_dma(CPU* cpu, uint16_t addr_start)

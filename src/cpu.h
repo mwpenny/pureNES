@@ -3,12 +3,9 @@
 
 #include <stdint.h>
 
-typedef enum {
-	INT_NONE,
-	INT_RESET,
-	INT_NMI,
-	INT_IRQ
-} InterruptType;
+#define INT_RST 0x01
+#define INT_NMI 0x02
+#define INT_IRQ 0x04
 
 typedef enum {
 	AMODE_ACC,  /* Accumulator addressing */
@@ -39,7 +36,7 @@ typedef struct
 	uint8_t is_running;/*, oam_dma_started;
 	uint8_t oam_dma_bytes_copied;*/
 	uint8_t opcode;
-	InterruptType last_int;
+	uint8_t pending_interrupts;
 	AddressingMode instr_amode;
 	uint16_t eff_addr/*, oam_dma_addr*/;
 	uint16_t cycles, idle_cycles;
