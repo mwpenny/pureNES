@@ -5,12 +5,17 @@
 #include "renderer.h"
 
 typedef struct {
+		uint8_t palette;
+		uint8_t back_priority;
+		uint8_t flip_x;
+		uint8_t flip_y;
+		uint8_t x;
+		uint8_t bmp_lo, bmp_hi;
+} Sprite;
+
+typedef struct {
 	struct NES* nes;
 	
-	uint8_t io_latch;
-	uint8_t x;	   /* Fine x scroll (3 bits) */
-	uint8_t w;	   /* First/second write flag */
-
 	/* Current and temp VRAM address (15 bits each)
 	   yyy NN YYYYY XXXXX
 	   ||| || ||||| +++++-- coarse X scroll
@@ -19,73 +24,29 @@ typedef struct {
 	   +++----------------- fine Y scroll */
 	uint16_t v, t;
 
-	/* PPU control register
-		7  bit  0
-		---- ----
-		VPHB SINN
-		|||| ||||
-		|||| ||++- Base nametable address
-		|||| ||    (0 = $2000; 1 = $2400; 2 = $2800; 3 = $2C00)
-		|||| |+--- VRAM address increment per CPU read/write of PPUDATA
-		|||| |     (0: add 1, going across; 1: add 32, going down)
-		|||| +---- Sprite pattern table address for 8x8 sprites
-		||||       (0: $0000; 1: $1000; ignored in 8x16 mode)
-		|||+------ Background pattern table address (0: $0000; 1: $1000)
-		||+------- Sprite size (0: 8x8; 1: 8x16)
-		|+-------- PPU master/slave select
-		|          (0: read backdrop from EXT pins; 1: output color on EXT pins)
-		+--------- Generate an NMI at the start of the
-				   vertical blanking interval (0: off; 1: on)*/
-	uint8_t ppuctrl;
-
-	/* PPU mask register
-		7  bit  0
-		---- ----
-		BGRs bMmG
-		|||| ||||
-		|||| |||+- Grayscale (0: normal color, 1: produce a greyscale display)
-		|||| ||+-- 1: Show background in leftmost 8 pixels of screen, 0: Hide
-		|||| |+--- 1: Show sprites in leftmost 8 pixels of screen, 0: Hide
-		|||| +---- 1: Show background
-		|||+------ 1: Show sprites
-		||+------- Emphasize red*
-		|+-------- Emphasize green*
-		+--------- Emphasize blue*
-		* NTSC colors. PAL and Dendy swaps green and red */
-	uint8_t ppumask;
-
-	/* Flags for PPUSTATUS ($2002) */
+	uint8_t x;  /* Fine x scroll */
+	uint8_t w;  /* First/second write flag */
+	uint8_t odd_frame;
 	uint8_t spr_overflow;
-	uint8_t szero_hit;
+	uint8_t spr0_hit;
 	uint8_t vblank_started;
 
+	uint8_t io_latch;  /* Last value written to a PPU register */
+	uint8_t ppuctrl;
+	uint8_t ppumask;
 	uint8_t oamaddr;
-	uint8_t data_buf;	/* For buffered reads from PPUDATA ($2007) */
+	uint8_t data_buf;  /* For buffered reads from PPUDATA ($2007) */
 
-	/* PPU memory */
-	uint8_t vram[2048];
-
-	/* Object attribute (sprite) memory
-		4 bytes/sprite
-
-		Byte 0:
-		76543210
-		||||||||
-		++++++++- Y position of sprite
-
-		Byte 1:
-			For 8x8 sprites:
-			76543210
-			||||||||
-			++++++++- Tile number of sprite within sprite pattern table
-
+	/* Object attribute (sprite) memory. 64 entries. 4 bytes/sprite
+		Byte 0: sprite Y position
+		Byte 1: sprite tile
+			For 8x8 sprites: tile number
 			For 8x16 sprites:
 			76543210
 			||||||||
 			|||||||+- Bank ($0000 or $1000) of tiles
 			+++++++-- Tile number of top of sprite (0 to 254; bottom half is next tile)
-
-		Byte 2:
+		Byte 2: sprite attributes
 		76543210
 		||||||||
 		||||||++- Palette (4 to 7) of sprite
@@ -93,42 +54,34 @@ typedef struct {
 		||+------ Priority (0: in front of background; 1: behind background)
 		|+------- Flip sprite horizontally
 		+-------- Flip sprite vertically
-
-		Byte 3:
-		76543210
-		||||||||
-		++++++++- X position of sprite
-	*/
+		Byte 3: sprite x position */
 	uint8_t oam[256];
-	uint8_t pram[32];
+	uint8_t soam[32];    /* Secondary OAM */
+	uint8_t vram[2048];  /* i.e., nametables */
+	uint8_t pram[32];    /* Palette memory */
 
-	uint16_t scanline;
-	uint16_t cycle;
-
-	/* TODO: make everything below internal */
-	uint8_t nt_byte;
-	uint8_t attr_byte;
-	uint32_t tile_bmap_low;
-	uint32_t tile_bmap_hi;
-
-	uint8_t spr_in_range, ovr_check_done, oamend;
-
-	uint16_t bg_attr1, bg_attr2;
-	uint16_t bg_bmp1, bg_bmp2;
-
-	uint8_t soam[32]; /* Secondary OAM */
+	/* Used during sprite evaluation */
+	uint8_t oam_buf;  /* For buffered OAM reads */
+	uint8_t spr_in_range;
+	uint8_t overflow_checked;
 	uint8_t soam_idx;
+	uint8_t oam_searched;
 
-	uint8_t spr_attr[8];
-	uint8_t spr_x[8];
-	uint8_t spr_bmp1[8], spr_bmp2[8];
+	/* Internal latches and shift registers for use during rendering */
+	uint8_t bg_tile_idx;
+	uint8_t bg_attr_latch;
+	uint16_t bg_bmp_latch;
+	uint16_t bg_attr_lo, bg_attr_hi;
+	uint16_t bg_bmp_lo, bg_bmp_hi;
+	Sprite scanline_sprites[8];
 
+	uint16_t scanline, cycle;
 } PPU;
 
+/*void ppu_oamdata_write(PPU* ppu, uint8_t val);*/
 void ppu_init(PPU* ppu, struct NES* nes);
 void ppu_write(PPU* ppu, uint16_t addr, uint8_t val);
 uint8_t ppu_read(PPU* ppu, uint16_t addr);
-
-void ppu_step(PPU* ppu, RenderSurface screen);
+void ppu_tick(PPU* ppu, RenderSurface screen);
 
 #endif

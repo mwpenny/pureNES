@@ -1,37 +1,45 @@
-#include <stdint.h>
+/* Ricoh 2C02 PPU (picture processing unit) emulator.
+   Provides NES graphics data manipulation, processing, and output */
 
-#include "nes.h"
-#include "memory.h"
-#include "renderer.h"
-#include "ppu.h"
+#include <stdint.h>
+#include <stdio.h>
+
 #include "game.h"
+#include "memory.h"
+#include "nes.h"
+#include "ppu.h"
+#include "renderer.h"
 
 /* TODO: XOR vs AND/OR */
 
-/*** PPUCTRL ($2000) macros ***/
-#define NAMETABLE(ppu) ((ppu->ppuctrl & 3) * 0x400) + 0x2000 /* TODO: NECESSARY? */
-#define VADDR_INC(ppu) (((ppu->ppuctrl >> 2) & 1) * 31) + 1
-#define SPR_TBL(ppu) ((ppu->ppuctrl >> 3) & 1) * 0x1000
-#define BG_TBL(ppu) ((ppu->ppuctrl >> 4) & 1) * 0x1000
-#define SPR_SIZE(ppu) ((ppu->ppuctrl >> 5) & 1)
-#define MSTR_SLV(ppu) ((ppu->ppuctrl >> 6) & 1)
-#define NMI_ENABLED(ppu) ((ppu->ppuctrl >> 7) & 1)
+/* PPUCTRL ($2000) fields */
+#define BASE_NAMETABLE (0x2000 + ((ppu->ppuctrl & 3) * 0x400))
+#define VRAM_ADDR_INC (1 + (((ppu->ppuctrl >> 2) & 1) * 31))
+#define SPR_PATTERN_TABLE (((ppu->ppuctrl >> 3) & 1) * 0x1000)
+#define BG_PATTERN_TABLE (((ppu->ppuctrl >> 4) & 1) * 0x1000)
+#define TALL_SPRITES (ppu->ppuctrl & 0x20)
+#define EXT_OUTPUT (ppu->ppuctrl & 0x40)
+#define NMI_ENABLED (ppu->ppuctrl & 0x80)
 
-#define VBLANK_START(ppu) (ppu->scanline == 241 && ppu->cycle == 1)
+/* PPUMASK ($2001) fields */
+#define GRAYSCALE (ppu->ppumask & 0x01)
+#define LEFT_BG_ENABLED (ppu->ppumask & 0x02)
+#define LEFT_SPR_ENABLED (ppu->ppumask & 0x04)
+#define BG_ENABLED (ppu->ppumask & 0x08)
+#define SPR_ENABLED (ppu->ppumask & 0x10)
+#define EMPH_R (ppu->ppumask & 0x20)
+#define EMPH_G (ppu->ppumask & 0x40)
+#define EMPH_B (ppu->ppumask & 0x80)
 
-/*** PPUMASK ($2001) macros ***/
-#define GRAYSCALE(ppu) (ppu->ppumask & 1)
-#define BG_LEFT_ENALED(ppu) ((ppu->ppumask >> 1) & 1)
-#define SPR_LEFT_ENABLED(ppu) ((ppu->ppumask >> 2) & 1)
-#define BG_ENABLED(ppu) ((ppu->ppumask >> 3) & 1)
-#define SPR_ENABLED(ppu) ((ppu->ppumask >> 4) & 1)
+/* Helper macros for rendering */
+#define VISIBLE_LINE (ppu->scanline < 240)
+#define PRERENDER_LINE (ppu->scanline == 261)
+#define VISIBLE_CYCLE (ppu->cycle > 0 && ppu->cycle < 257)
+#define PREFETCH_CYCLE (ppu->cycle >= 321 && ppu->cycle <= 336)
+#define SPRITE_FETCH_CYCLE (ppu->cycle >= 257 && ppu->cycle <= 320)
+#define VBLANK_START (ppu->scanline == 241 && ppu->cycle == 1)
 
-/* NTSC colors. PAL and Dendy swap green and red */
-#define EMPH_R(ppu) ((ppu->ppumask >> 5) & 1)
-#define EMPH_G(ppu) ((ppu->ppumask >> 6) & 1)
-#define EMPH_B(ppu) ((ppu->ppumask >> 7) & 1)
-
-/* TODO: Actually decode the video signal? Endianness. */
+/* NES RGB palette */
 static uint32_t palette[64] =
 {
 	0x7C7C7C, 0x0000FC, 0x0000BC, 0x4428BC, 0x940084, 0xA80020, 0xA81000, 0x881400,
@@ -44,102 +52,66 @@ static uint32_t palette[64] =
 	0xF8D878, 0xD8F878, 0xB8F8B8, 0xB8F8D8, 0x00FCFC, 0xF8D8F8, 0x000000, 0x000000
 };
 
-static uint8_t ppu_mem_read(PPU* ppu, uint16_t addr)
+static uint8_t* dispatch_address(PPU* ppu, uint16_t addr)
 {
-	/* Pattern tables ($0000-$1FFF) */
 	if (addr < 0x1000)
-		return ppu->nes->game.chr_bank1[addr];
+		return &ppu->nes->game.chr_bank1[addr];
 	else if (addr < 0x2000)
-		return ppu->nes->game.chr_bank2[addr - 0x1000];
-	/* Namtables ($2000-$2FFF; $3F00-$3F1F mirror $2000-$2EFF) */
+		return &ppu->nes->game.chr_bank2[addr - 0x1000];
 	else if (addr < 0x3F00)
 	{
-		/* TODO: less branching? */
-		/*uint8_t vm = GAME_VERT_MIRRORING((&ppu->nes->game));
-		uint8_t row = (addr >> 11) & 1;
-
-		return ppu->vram[(addr & (0x3FF | (vm<<10))) + row*0x400*!vm];*/
-
-		/* Handle nametable mirroring */
+		/* Nametable mirroring */
 		if (ppu->nes->game.mirror_mode == MIRRORING_VERTICAL)
-			return ppu->vram[addr & 0x7FF];
+			return &ppu->vram[addr & 0x7FF];
 		else if (ppu->nes->game.mirror_mode == MIRRORING_HORIZONTAL)
+			return &ppu->vram[addr & 0x3FF | ((addr & 0x800) >> 1)];
+		else
 		{
-			uint8_t row = (addr >> 11) & 1;
-			return ppu->vram[addr & 0x3FF | (row << 10)];
+			/* TODO: 4-screen mirroring and single-screen mirroring */
 		}
-		/*else
-		{
-			TODO: OTHER MIRRORINGS
-		}*/
 	}
-	/* Palettes ($3F00-$3F1F; mirrored at $3F20-$3FFF) */
 	else if (addr < 0x4000)
 	{
 		/* TODO: look into background palette hack */
 
-		uint8_t a = (addr-0x3F00)%0x20;
-
-		/* Palette background mirroring.
+		/* Palette background mirroring:
 		   $3F04/$3F08/$3F0C can contain unique data, but
 		   $3F10/$3F14/$3F18/$3F1C mirror $3F00/$3F04/$3F08/$3F0C */
-		/* Necessary? */
-		if (a > 15 && (a % 4) == 0)
-			a = 0;
-
-		/* Grayscale */
-		if (ppu->ppumask & 1)
-			return ppu->pram[a] & 0x30;
-		return ppu->pram[a];
+		if ((addr & 0x13) == 0x10)
+			return &ppu->pram[addr & 0x0F];
+		return &ppu->pram[addr & 0x1F];
 	}
-	/* Out of bounds. Oh shit... */
-	return 0;
+	fprintf(stderr, "Warning: invalid PPU memory access ($%04X)\n", addr);
+	/*return &ppu->io_latch;*/
+	return 0;  /* TODO: return last value on bus */
+}
+
+static uint8_t ppu_mem_read(PPU* ppu, uint16_t addr)
+{
+	return *dispatch_address(ppu, addr);
 }
 
 static void ppu_mem_write(PPU* ppu, uint16_t addr, uint8_t val)
 {
-	/* Pattern tables ($0000-$1FFF) */
-	if (addr < 0x2000)
-		ppu->nes->game.chr_bank1[addr] = val;
-	else if (addr < 0x2000)
-		ppu->nes->game.chr_bank2[addr - 0x1000] = val;
-	/* Namtables ($2000-$2FFF; $3F00-$3F1F mirror $2000-$2EFF) */
-	else if (addr < 0x3F00)
-	{
-		/* Handle nametable mirroring */
-		if (ppu->nes->game.mirror_mode == MIRRORING_VERTICAL)
-			ppu->vram[addr & 0x7FF] = val;
-		else if (ppu->nes->game.mirror_mode == MIRRORING_HORIZONTAL)
-		{
-			uint8_t row = (addr >> 11) & 1;
-			ppu->vram[addr & 0x3FF | (row << 10)] = val;
-		}
-		/*else
-		{
-			TODO: OTHER MIRRORINGS
-		}*/
-	}
-	/* Palettes ($3F00-$3F1F; mirrored at $3F20-$3FFF) */
-	else if (addr < 0x4000)
-	{
-		/* TODO: look into background palette hack */
-
-		uint8_t a = (addr-0x3F00)%0x20;
-
-		/* Palette background mirroring.
-		   $3F04/$3F08/$3F0C can contain unique data, but
-		   $3F10/$3F14/$3F18/$3F1C mirror $3F00/$3F04/$3F08/$3F0C */
-		if (a > 15 && (a % 4) == 0)
-			a = 0;
-		ppu->pram[a] = val;
-	}
-	else
-	{
-		/* Out of bounds. Oh shit... */
-	}
+	*dispatch_address(ppu, addr) = val;
 }
 
-/* Control register ($2000) write */
+/* Control register ($2000)
+   7  bit  0
+   ---- ----
+   VPHB SINN
+   |||| ||||
+   |||| ||++- Base nametable address
+   |||| ||    (0 = $2000; 1 = $2400; 2 = $2800; 3 = $2C00)
+   |||| |+--- VRAM address increment per CPU read/write of PPUDATA
+   |||| |     (0: add 1, going across; 1: add 32, going down)
+   |||| +---- Sprite pattern table address for 8x8 sprites
+   ||||       (0: $0000; 1: $1000; ignored in 8x16 mode)
+   |||+------ Background pattern table address (0: $0000; 1: $1000)
+   ||+------- Sprite size (0: 8x8; 1: 8x16)
+   |+-------- PPU master/slave select
+   |          (0: read backdrop from EXT pins; 1: output color on EXT pins)
+   +--------- If set, generate an NMI at the start of vblank */
 static void ppuctrl_write(PPU* ppu, uint8_t val)
 {
 	/* Copy base nametable address
@@ -148,19 +120,40 @@ static void ppuctrl_write(PPU* ppu, uint8_t val)
 	ppu->ppuctrl = val;
 }
 
-/* Mask register ($2001) write */
+/* Mask register ($2001)
+   7  bit  0
+   ---- ----
+   BGRs bMmG
+   |||| ||||
+   |||| |||+- Grayscale (0: normal color, 1: produce a greyscale display)
+   |||| ||+-- 1: Show background in leftmost 8 pixels of screen, 0: Hide
+   |||| |+--- 1: Show sprites in leftmost 8 pixels of screen, 0: Hide
+   |||| +---- 1: Show background
+   |||+------ 1: Show sprites
+   ||+------- Emphasize red*
+   |+-------- Emphasize green*
+   +--------- Emphasize blue*
+   * NTSC colors. PAL and Dendy swap green and red */
 static void ppumask_write(PPU* ppu, uint8_t val)
 {
 	ppu->ppumask = val;
 }
 
-/* Status register ($2002) read */
+/* Status register ($2002)
+   7  bit  0
+   ---- ----
+   VSO. ....
+   |||| ||||
+   |||+-++++- Least significant bits previously written into a PPU register
+   ||+------- Sprite overflow
+   |+-------- Sprite 0 hit
+   +--------- Vblank started (0: not in vblank; 1: in vblank). */
 static uint8_t ppustatus_read(PPU* ppu)
 {
 	/* Reading PPUSTATUS at the exact start of vblank will return 0 in bit 7 but
 	   clear the latch anyway, causing the program to miss frames */
-	uint8_t ret = ((!VBLANK_START(ppu) && ppu->vblank_started) << 7) |
-				  (ppu->szero_hit << 6) |
+	uint8_t ret = ((!VBLANK_START && ppu->vblank_started) << 7) |
+				  (ppu->spr0_hit << 6) |
 				  (ppu->spr_overflow << 5) |
 				  (ppu->io_latch & 0x1F);
 	ppu->vblank_started = 0;
@@ -168,52 +161,34 @@ static uint8_t ppustatus_read(PPU* ppu)
 	return ret;
 }
 
-/* OAM address port ($2003) write */
+/* OAM address register ($2003). Address in OAM to access through OAMDATA */
 static void oamaddr_write(PPU* ppu, uint8_t val)
 {
 	ppu->oamaddr = val;
 }
 
-/* OAM data port ($2004) read */
+/* OAM data port ($2004). Provides read/write to OAM */
 static uint8_t oamdata_read(PPU* ppu)
 {
-	/* TODO: under certain conditions, the contents of soam are returned */
+	/* TODO: under certain conditions, the contents of soam are returned? */
 
 	/* Attempting to read during rendering returns $FF */
-	if (ppu->scanline < 240 && ppu->cycle > 0 && ppu->cycle < 65)
+	if (ppu->scanline < 240 && ppu->cycle >= 1 && ppu->cycle <= 64)
 		return 0xFF;
-	return ppu->oam[ppu->oamaddr & 0xFF];
+	return ppu->oam[ppu->oamaddr];
 }
-
-/* OAM data port ($2004) write */
 static void oamdata_write(PPU* ppu, uint8_t val)
 {
-	/* TODO: Writes to OAMDATA during rendering (on the pre-render
-	   line and the visible lines 0-239, provided either sprite or
-	   background rendering is enabled) do not modify values in OAM,
-	   but do perform a glitchy increment of OAMADDR, bumping only the
-	   high 6 bits (i.e., it bumps the [n] value in PPU sprite evaluation
-	   - it's plausible that it could bump the low bits instead depending
-	   on the current status of sprite evaluation). This extends to DMA transfers
-	   via OAMDMA, since that uses writes to $2004. For emulation purposes,
-	   it is probably best to completely ignore writes during rendering. */
-
-	/* TODO: In the 2C07, sprite evaluation can never be fully disabled,
-	   and will always start 20 scanlines after the start of vblank[9]
-	   (same as when the prerender scanline would have been on the 2C02).
-	   As such, you must upload anything to OAM that you intend to within
-	   the first 20 scanlines after the 2C07 signals vertical blanking. */
-
 	/* Zero out unused bits in attribute byte */
 	if ((ppu->oamaddr & 3) == 2)
 		val &= 0xE3;
 	ppu->oam[ppu->oamaddr++] = val;
 }
 
-/* PPU scroll position register ($2005) write */
+/* PPU scroll position register ($2005) */
 static void ppuscroll_write(PPU* ppu, uint8_t val)
 {
-	if ((ppu->w = !ppu->w))
+	if ((ppu->w ^= 1))
 	{
 		/* First write: update coarse and fine X
 		   t: ....... ...HGFED = d: HGFED...
@@ -230,10 +205,10 @@ static void ppuscroll_write(PPU* ppu, uint8_t val)
 	}
 }
 
-/* PPU address register ($2006) write */
+/* PPU address register ($2006). Address is VRAM to access through PPUDATA */
 static void ppuaddr_write(PPU* ppu, uint8_t val)
 {
-	if ((ppu->w = !ppu->w))
+	if ((ppu->w ^= 1))
 	{
 		 /* First write: copy high byte
 		    t: .FEDCBA ........ = d: ..FEDCBA
@@ -249,14 +224,13 @@ static void ppuaddr_write(PPU* ppu, uint8_t val)
 	}
 }
 
-/* PPU data port ($2007) read */
+/* PPU data port ($2007). Provides read/write to VRAM */
 static uint8_t ppudata_read(PPU* ppu)
 {
 	uint8_t val;
-
 	if (ppu->v < 0x3F00)
 	{
-		/* Reading when v is in [0, $3EFF] returns contents of internal buffer */
+		/* Reading when 0 <= v <= $3EFF returns contents of internal buffer */
 		val = ppu->data_buf;
 		ppu->data_buf = ppu_mem_read(ppu, ppu->v);
 	}
@@ -268,121 +242,41 @@ static uint8_t ppudata_read(PPU* ppu)
 		ppu->data_buf = ppu_mem_read(ppu, ppu->v - 0x1000);
 	}
 
-	/* TODO: During rendering (on the pre-render line and the visible lines 0-239,
-	   provided either background or sprite rendering is enabled),
-	   it will update v in an odd way...
-	   
-	   Used by Young Indiana Jones Chronicles and Burai Fighter */
-
-	ppu->v += VADDR_INC(ppu);
+	/* X and Y incremented if PPUDATA is accessed during rendering
+	   Used by Young Indiana Jones Chronicles and Burai Fighter
+	if (ppu->scanline == 261 || ppu->scanline < 240)
+	{
+		inc_coarse_x(ppu);
+		inc_y(ppu);
+	}*/
+	ppu->v += VRAM_ADDR_INC;
 	return val;
 }
-
-/* PPU data port ($2007) write */
 static void ppudata_write(PPU* ppu, uint8_t val)
 {
-	/* TODO: During rendering (on the pre-render line and the visible lines 0-239,
-	   provided either background or sprite rendering is enabled),
-	   it will update v in an odd way...
-	   
-	   Used by Young Indiana Jones Chronicles and Burai Fighter */
+	/* X and Y incremented if PPUDATA is accessed during rendering
+	   Used by Young Indiana Jones Chronicles and Burai Fighter
+	if (ppu->scanline == 261 || ppu->scanline < 240)
+	{
+		inc_coarse_x(ppu);
+		inc_y(ppu);
+	}*/
 	ppu_mem_write(ppu, ppu->v, val);
-	ppu->v += VADDR_INC(ppu);
+	ppu->v += VRAM_ADDR_INC;
 }
 
-/* OAM DMA register ($4014) write */
+/* OAM DMA register ($4014). Triggers a copy of a block of memory from RAM */
 static void oamdma_write(PPU* ppu, uint8_t val)
 {
 	/* Address range = $XX00 - $XXFF */
 	uint16_t addr = val << 8;
 	uint16_t i = 0;
-
 	for (; i < 256; ++i)
 		oamdata_write(ppu, memory_get(ppu->nes, addr++));
-
-	/* TODO: clean this up / better implement */
-	ppu->nes->cpu.dma_cycles = 513 + ppu->nes->cpu.oddcycle;
+	ppu->nes->cpu.idle_cycles += 513 + (ppu->nes->cpu.cycles & 1);
 }
 
-void ppu_init(PPU* ppu, NES* nes)
-{
-	memset(ppu, 0, sizeof(*ppu));
-	ppu->nes = nes;
-
-	/* TODO: proper power-up state */
-	/*ppu->cycle = 340;
-	ppu->scanline = 240;*/
-}
-
-/*** PPU access via memory-mapped registers ***/
-
-void ppu_write(PPU* ppu, uint16_t addr, uint8_t val)
-{
-	ppu->io_latch = val;
-
-	switch (addr)
-	{
-		case 0x2000:
-			ppuctrl_write(ppu, val);
-			break;
-		case 0x2001:
-			ppumask_write(ppu, val);
-			break;
-		case 0x2002:
-			break;
-		case 0x2003:
-			oamaddr_write(ppu, val);
-			break;
-		case 0x2004:
-			oamdata_write(ppu, val);
-			break;
-		case 0x2005:
-			ppuscroll_write(ppu, val);
-			break;
-		case 0x2006:
-			ppuaddr_write(ppu, val);
-			break;
-		case 0x2007:
-			ppudata_write(ppu, val);
-			break;
-		case 0x4014:
-			oamdma_write(ppu, val);
-			break;
-
-		/* Invalid address!! */
-		/* TODO: Don't silently fail like this. Should never happen though. */
-		default:
-			break;		
-	}
-}
-
-uint8_t ppu_read(PPU* ppu, uint16_t addr)
-{
-	switch (addr)
-	{
-		/* Reading from write-only registers returns open bus */
-		case 0x2000:
-		case 0x2001:
-		case 0x2003:
-		case 0x2005:
-		case 0x2006:
-		case 0x4014:
-			return ppu->io_latch;
-		case 0x2002:
-			return ppustatus_read(ppu);
-		case 0x2004:
-			return oamdata_read(ppu);
-		case 0x2007:
-			return ppudata_read(ppu);
-
-		/* Invalid address!! */
-		/* TODO: Don't silently fail like this. Should never happen though. */
-		default:
-			return 0;	
-	}
-}
-
-static uint8_t bg_get_tile_palette(PPU* ppu)
+static uint8_t get_bg_palette(PPU* ppu)
 {
 	/* Fetch the palette attribute for the current tile */
 
@@ -403,69 +297,51 @@ static uint8_t bg_get_tile_palette(PPU* ppu)
 	   || ++--------- Bottom left 2x2 region's palette index
 	   ++------------ Bottom right 2x2 region's palette index
 
-	   Use scroll values to isolate palette index for current tile's 2x2 tile region.
-
-	   Shift right 2 every 2 X tiles (right 2x2 subregions in 4x4 tile regions).
-	   Shift right 4 every 2 Y tiles (bottom 2x2 subregions in 4x4 tile regions). */
+	   Use scroll values to isolate palette index for current tile's 2x2 region
+	     -Shift right 2 every 2 X tiles (right 2x2 subregions)
+	     -Shift right 4 every 2 Y tiles (bottom 2x2 subregions) */
 	return (ppu_mem_read(ppu, addr) >>
 			((ppu->v & 2) | ((ppu->v >> 4) & 4))) & 3;
 }
-static uint8_t bg_get_tile_sliver(PPU* ppu, uint8_t tile, uint8_t hb)
-{
-	/* Fetch byte of background tile bitmap row from pattern table */
-	/* TODO: deduce low/high byte from address? */
-	/* TODO: get once. Don't need EXACT hb/lb sliver behavior? (probably not).
 
-	   We're our own people, we can make our own data structures,
-	   with blackjack and hookers! */
+static uint8_t get_bg_sliver(PPU* ppu, uint8_t tidx, uint8_t hb)
+{
+	/* Fetch row of background tile bitplane from pattern table.
+	   hb = whether or not to fetch the high byte */
 	uint8_t y = (ppu->v >> 12) & 7;
-	return ppu_mem_read(ppu, BG_TBL(ppu) + tile*16 + y + hb*8);
+	return ppu_mem_read(ppu, BG_PATTERN_TABLE + (tidx * 16) + y + (hb * 8));
 }
 
-static uint8_t spr_get_tile_sliver(PPU* ppu, uint8_t si, uint8_t hb)
+static uint8_t get_spr_sliver(PPU* ppu, uint8_t sidx, uint8_t hb)
 {
-	/* Fetch byte of sprite tile bitmap row from pattern table */
-	/* TODO: deduce low/high byte from address? */
-	/* TODO: get once. Don't need EXACT hb/lb sliver behavior? (probably not).
-
-	   We're our own people, we can make our own data structures,
-	   with blackjack and hookers! */
-
-	/* Sprites in secondary OAM have already been verified as being on the
-	   current scanline, therefore the difference between their Y coordinates
-	   and the current scanline number will not overflow an 8-bit integer */
-	uint8_t y = ppu->scanline - ppu->soam[si*4];
-	uint8_t attr = ppu->spr_attr[si];
-	uint8_t tile = ppu->soam[si*4+1];
-
+	/* Fetch row of sprite tile bitplane from pattern table.
+	   hb = whether or not to fetch the high byte */
+	Sprite* spr = &ppu->scanline_sprites[sidx];
+	uint8_t y = ppu->scanline - ppu->soam[sidx * 4];
+	uint8_t tidx = ppu->soam[(sidx * 4) + 1];
 	uint16_t addr;
 	uint8_t sliver;
 
-	/* 8x16 sprites */
-	if (ppu->ppuctrl & 0x20)
+	if (TALL_SPRITES)
 	{
-		/* Vertical flip */
-		if (attr & 0x80)
+		if (spr->flip_y)
 			y = 15 - y;
 
-		/* Tile bit 0 is used for pattern table select. Bits 1-7 are used for
-		   the top tile number. The bottom tile is next in the pattern table. */
-		addr = (tile & 1)*0x1000;
-		tile = (tile & 0xFE) + y/8;
-		y &= 7;
+		/* 8x16 sprites use tile bit 0 for pattern table select. Bits 1-7 are
+		   used for top tile number. Bottom tile is next in the pattern table. */
+		addr = (tidx & 1) * 0x1000;
+		tidx = (tidx & 0xFE) + (y / 8);
+		y &= 7;  /* Keep y relative to tile being rendered (not sprite) */
 	}
-	/* 8x8 sprites */
 	else
 	{
-		/* Vertical flip */
-		if (attr & 0x80)
+		if (spr->flip_y)
 			y = 7 - y;
-		addr = SPR_TBL(ppu);
+		addr = SPR_PATTERN_TABLE;
 	}
-	sliver = ppu_mem_read(ppu, addr + tile*16 + y + hb*8);
+	sliver = ppu_mem_read(ppu, addr + tidx*16 + y + hb*8);
 
-	/* Horizontal flip */
-	if (attr & 0x40)
+	if (spr->flip_x)
 	{
 		sliver = ((sliver & 0xAA) >> 1) | ((sliver & 0x55) << 1);
 		sliver = ((sliver & 0xCC) >> 2) | ((sliver & 0x33) << 2);
@@ -474,25 +350,25 @@ static uint8_t spr_get_tile_sliver(PPU* ppu, uint8_t si, uint8_t hb)
 	return sliver;
 }
 
-static void scroll_inc_x(PPU* ppu)
+static void inc_coarse_x(PPU* ppu)
 {
-	/* Increment coarse X, switching the horizontal nametable on wraparound */
+	/* Switch horizontal nametable on wraparound */
 	if ((ppu->v & 0x1F) == 0x1F)
 		ppu->v ^= 0x41F;
 	else
 		++ppu->v;
 }
 
-static void scroll_inc_y(PPU* ppu)
+static void inc_y(PPU* ppu)
 {
 	/* Switch vertical nametable on wraparound */
 	if ((ppu->v & 0x7000) == 0x7000)
 	{
-		uint8_t coarseY = (ppu->v >> 5) & 0x1F;
-		ppu->v &= ~0x7000; /* Clear fine Y */
+		uint8_t coarse_y = (ppu->v >> 5) & 0x1F;
+		ppu->v &= ~0x7000;  /* Clear fine Y */
 
-		/* Last row of nametable. Set coarse Y to 0 and switch NT */
-		if (coarseY == 29)
+		/* Last row of nametable: switch to next */
+		if (coarse_y == 29)
 		{
 			ppu->v &= 0x7C1F;
 			ppu->v ^= 0x0800;
@@ -500,81 +376,82 @@ static void scroll_inc_y(PPU* ppu)
 
 		/* If coarse Y is incremented from 31 ("out of bounds"), it will wrap
 		   to 0, but the nametable will not be switched */
-		else if (coarseY == 31)
+		else if (coarse_y == 31)
 			ppu->v &= 0x7C1F;
-
-		/* Inc coarse Y */
 		else
-			ppu->v += 0x20;
+			ppu->v += 0x20;  /* Inc coarse Y */
 	}
-
-	/* Inc fine Y */
 	else
-		ppu->v += 0x1000;
+		ppu->v += 0x1000;  /* Inc fine Y */
 }
 
-void bg_fetch_tile(PPU* ppu)
+void fetch_bg_data(PPU* ppu)
 {
 	switch (ppu->cycle % 8)
 	{
-		case 1:		/* Fetch tile id from current nametable */
-			ppu->nt_byte = ppu_mem_read(ppu, 0x2000 | (ppu->v & 0xFFF));
+		case 1:
+			ppu->bg_tile_idx = ppu_mem_read(ppu, 0x2000 | (ppu->v & 0xFFF));
 			break;
-		case 3:		/* Fetch tile attribute */
-			ppu->attr_byte = bg_get_tile_palette(ppu);
+		case 3:
+			ppu->bg_attr_latch = get_bg_palette(ppu);
 			break;
-		case 5:		/* Fetch low byte of tile bitmap row from pattern table */
-			ppu->tile_bmap_low = bg_get_tile_sliver(ppu, ppu->nt_byte, 0);
+		case 5:
+			ppu->bg_bmp_latch = get_bg_sliver(ppu, ppu->bg_tile_idx, 0);
 			break;
-		case 7:		/* Fetch high byte of tile bitmap row from pattern table */
-			ppu->tile_bmap_hi = bg_get_tile_sliver(ppu, ppu->nt_byte, 1);
+		case 7:
+			ppu->bg_bmp_latch |= get_bg_sliver(ppu, ppu->bg_tile_idx, 1) << 8;
 			break;
-		case 0:		/* Move data from internal latches to shift registers */
-			ppu->bg_attr1 = (ppu->bg_attr1 & 0xFF00) | ((ppu->attr_byte & 0x01) * 0xFF);
-			ppu->bg_attr2 = (ppu->bg_attr2 & 0xFF00) | (((ppu->attr_byte >> 1) & 0x01) * 0xFF);
-
-			ppu->bg_bmp1 = (ppu->bg_bmp1 & 0xFF00) | ppu->tile_bmap_low;
-			ppu->bg_bmp2 = (ppu->bg_bmp2 & 0xFF00) | ppu->tile_bmap_hi;
+		case 0:
+			/* Move data from internal latches to shift registers.
+			   Due to timing, the lower 8 bits will already have been shifted out */
+			ppu->bg_attr_lo |= (ppu->bg_attr_latch & 0x01) * 0xFF;
+			ppu->bg_attr_hi |= ((ppu->bg_attr_latch >> 1) & 0x01) * 0xFF;
+			ppu->bg_bmp_lo |= ppu->bg_bmp_latch & 0xFF;
+			ppu->bg_bmp_hi |= ppu->bg_bmp_latch >> 8;
 
 			/* Move to next tile */
-			scroll_inc_x(ppu);
+			inc_coarse_x(ppu);
 			break;
 	}
 }
 
 void find_sprites(PPU* ppu)
 {
+	/* TODO: better accuracy */
 	uint8_t spr_height = ((ppu->ppuctrl & 0x20) >> 5)*8 + 8;
 
-	if (ppu->cycle == 0)
+	if (ppu->cycle == 1)
 	{
 		ppu->soam_idx = 0;
 		ppu->spr_in_range = 0;
-		ppu->ovr_check_done = 0;
-		ppu->oamend = 0;
+		ppu->overflow_checked = 0;
+		ppu->oam_searched = 0;
 	}
-	else if (!(ppu->cycle & 1))
-	{
-		uint8_t oam_buf = oamdata_read(ppu);
 
+	if (ppu->cycle & 1)
+	{
+		ppu->oam_buf = oamdata_read(ppu);
+	}
+	else
+	{
 		/* Clear secondary OAM (reads will have returned $FF) */
 		if (ppu->cycle < 65)
 		{
-			ppu->soam[ppu->soam_idx] = oam_buf;
-			ppu->soam_idx = (ppu->soam_idx+1) & 31;
+			ppu->soam[ppu->soam_idx] = ppu->oam_buf;
+			ppu->soam_idx = (ppu->soam_idx + 1) & 31;
 		}
 		/* Discover first 8 sprites on the current scanline */
 		else if (ppu->cycle < 257)
 		{
 			uint8_t oamaddr_inc = 0;
-			if (!ppu->oamend && !ppu->ovr_check_done)
+			if (!ppu->oam_searched && !ppu->overflow_checked)
 			{
-				ppu->spr_in_range = ppu->spr_in_range || (oam_buf <= ppu->scanline &&
-														  oam_buf+spr_height > ppu->scanline);
+				ppu->spr_in_range = ppu->spr_in_range || (ppu->oam_buf <= ppu->scanline &&
+														  (ppu->oam_buf + spr_height) > ppu->scanline);
 
 				/* Fewer than 8 sprites found */
 				if (ppu->soam_idx < 32)
-					ppu->soam[ppu->soam_idx] = oam_buf;
+					ppu->soam[ppu->soam_idx] = ppu->oam_buf;
 				else
 				{
 					/* 2C02 hardware bug! Will result in OAMADDR being
@@ -595,148 +472,120 @@ void find_sprites(PPU* ppu)
 			}
 
 			/* Check overflow */
-			ppu->oamend = ppu->oamend || (0xFF - ppu->oamaddr < oamaddr_inc);
+			ppu->oam_searched = ppu->oam_searched || (0xFF - ppu->oamaddr < oamaddr_inc);
 			ppu->oamaddr = (ppu->oamaddr + oamaddr_inc) & 0xFF;
 		}
 	}
 }
 
-void fetch_next_sprite(PPU* ppu)
+void fetch_sprite_data(PPU* ppu)
 {
-	/* TODO: If there are fewer than 8 sprites on the next scanline,
-			 then dummy fetches to tile $FF occur for the left-over sprites */
-
-	/* TODO: somehow combine with tile fetching logic */
-	uint8_t si = (ppu->cycle - 257)/8;
-	static uint8_t ccount;
-
-	if (ppu->cycle == 257)
-		ccount = 0;
-
-	switch (ccount % 8)
+	uint8_t sidx = (ppu->cycle - 257) / 8;
+	Sprite* spr = &ppu->scanline_sprites[sidx];
+	switch (ppu->cycle % 8)
 	{
-		/* TODO: For the first empty sprite slot, this will consist of sprite #63's Y-coordinate
-		   followed by 3 $FF bytes; for subsequent empty sprite slots, this will be four $FF bytes */
-
-		case 2:
-			ppu->spr_attr[si] = ppu->soam[(si*4)+2];
+		case 5:
+		{
+			uint8_t attr = ppu->soam[(sidx * 4) + 2];
+			spr->palette = attr & 3;
+			spr->back_priority = attr & 0x20;
+			spr->flip_x = attr & 0x40;
+			spr->flip_y = attr & 0x80;
+			spr->x = ppu->soam[(sidx * 4) + 3];
+			spr->bmp_lo = get_spr_sliver(ppu, sidx, 0);
 			break;
-		case 3:
-			ppu->spr_x[si] = ppu->soam[(si*4)+3];
-			break;
-		case 5:		/* Fetch low byte of tile bitmap row from pattern table */
-			ppu->spr_bmp1[si] = spr_get_tile_sliver(ppu, si, 0);
-			break;
-		case 7:		/* Fetch high byte of tile bitmap row from pattern table */
-			ppu->spr_bmp2[si] = spr_get_tile_sliver(ppu, si, 1);
+		}
+		case 7:
+			spr->bmp_hi = get_spr_sliver(ppu, sidx, 1);
 			break;
 	}
-
-	++ccount;
 	ppu->oamaddr = 0;
 }
 
 void draw(PPU* ppu, RenderSurface screen)
 {
-	uint8_t fxo = 15 - ppu->x; /* Fine X offset */
-	uint8_t bg_pi = 0;
-	uint8_t spr_pi = 0;
-	uint8_t si = 0;
-	uint32_t px_color = 0;
+	uint8_t x = ppu->cycle - 1;
+	uint8_t bg_pal_idx = 0;
+	uint8_t color = 0;
 
-	uint8_t i = 0;
-	for (; i < 8; ++i)
+	if (BG_ENABLED && ((x > 7 || LEFT_BG_ENABLED)))
 	{
-		/*if (ppu->cycle >= ppu->spr_x[i])*/
-		if (ppu->spr_x[i] == 0)
+		/* Render background */
+		uint8_t shift = 15 - ppu->x;
+		uint8_t bg_palette = ((ppu->bg_attr_lo >> shift) & 1) |
+							 ((ppu->bg_attr_hi >> (shift - 1)) & 2);
+		bg_pal_idx = ((ppu->bg_bmp_lo >> shift) & 1) |
+					 ((ppu->bg_bmp_hi >> (shift - 1)) & 2);
+
+		/* TODO: implement background palette hack */
+		/* Palette background mirroring. Although $3F04/$3F08/$3F0C can
+		   contain unique background data, only the universal background
+		   color is used during rendering. */
+		color = (bg_pal_idx == 0) ?
+				ppu_mem_read(ppu, 0x3F00) :
+				ppu_mem_read(ppu, 0x3F00 | (bg_palette*4 + bg_pal_idx));
+	}
+	if (SPR_ENABLED && (x > 7 || LEFT_SPR_ENABLED))
+	{
+		/* Render sprites */
+		uint8_t i = 0;
+		for (; i < 8; ++i)
 		{
-			/* TODO: shouldn't this go after? */
-			/* TODO: decrementing logic starts at cycle 1 */
-
-			/* First non-transparent pixel moves on to multiplexer
-			   (unless using clipping window) */
-			if (spr_pi == 0 && (ppu->cycle > 7 || (ppu->ppumask & 0x04)))
+			Sprite* spr = &ppu->scanline_sprites[i];
+			if (x >= spr->x && x < (spr->x + 8))
 			{
-				spr_pi = ((ppu->spr_bmp1[i] >> 7) & 1) | ((ppu->spr_bmp2[i] >> 6) & 2);
-				si = i;
+				uint8_t shift = 7 - (x - spr->x);
+				uint8_t pidx = ((spr->bmp_lo >> shift) & 1) |
+							   (((spr->bmp_hi >> shift) << 1) & 2);
+
+				/* First non-transparent sprite wins (regardless of priority) */
+				if (pidx != 0)
+				{
+					/* Sprite zero hit: opaque background and opaque sprite on
+					   the same pixel */
+					/* TODO: doesn't happen at x=255 */
+					/* TODO: check sprite is actually sprite 0: OAM may change. memcmp approach isn't reliable */
+					ppu->spr0_hit = ppu->spr0_hit || (bg_pal_idx != 0 &&
+									 memcmp(ppu->oam, ppu->soam + i, 4) == 0);
+					if (bg_pal_idx == 0 || !spr->back_priority)
+						color = ppu_mem_read(ppu, 0x3F10 | ((spr->palette * 4) + pidx));
+					break;
+				}
 			}
-			ppu->spr_bmp1[i] <<= 1;
-			ppu->spr_bmp2[i] <<= 1;
 		}
-		else
-			--ppu->spr_x[i];
 	}
-
-	/* Only background color will be shown if using clipping window */
-	if (ppu->cycle > 7 || (ppu->ppumask & 0x02))
-		bg_pi = ((ppu->bg_bmp1 >> fxo) & 1) | ((ppu->bg_bmp2 >> (fxo-1)) & 2);
-
-	/* BG tile pixel is shown if no overlapping sprite or if overlapping sprite
-	   doesn't have priority */
-	if (spr_pi == 0 || (bg_pi != 0 && (ppu->spr_attr[si] & 0x20)))
-	{
-		uint8_t p = ((ppu->bg_attr1 >> fxo) & 1) | ((ppu->bg_attr2 >> (fxo-1)) & 2);
-		/* TODO: look into background palette hack */
-		/* Palette background mirroring. Although $3F04/$3F08/$3F0C (the
-		   background palettes' background color) can contain unique data,
-		   only the universal background color is used during rendering. */
-		px_color = (bg_pi == 0) ? ppu_mem_read(ppu, 0x3F00) :
-			ppu_mem_read(ppu, 0x3F00 | (p*4 + bg_pi));
-	}
-	else
-		px_color = ppu_mem_read(ppu, 0x3F10 | ((ppu->spr_attr[si]&3)*4) + spr_pi);
-
-	/* TODO: check sprite is actually sprite 0 */
-	ppu->szero_hit = ppu->szero_hit ||
-					 (memcmp(ppu->oam, ppu->soam+si, 4) == 0 &&
-					  ((ppu->ppumask & 0x18) == 0x18) &&
-					  bg_pi != 0 && spr_pi != 0);
-	render_pixel(screen, ppu->cycle, ppu->scanline, palette[px_color]);
+	if (GRAYSCALE)
+		color &= 0x30;
+	render_pixel(screen, x, ppu->scanline, palette[color]);
 }
 
-#define SL_RENDER(sl) (sl < 240)
-#define SL_PRERENDER(sl) (sl == 261)
-#define CYC_RENDER(cc) (cc > 0 && cc < 257)
-#define CYC_PREFETCH(cc) (cc > 320 && cc < 337)
-
-void ppu_step(PPU* ppu, RenderSurface screen)
+void ppu_tick(PPU* ppu, RenderSurface screen)
 {
 	/* TODO: ***read*** / write on correct cycles */
-	/* TODO: init SL to 240 */
-
-	if (BG_ENABLED(ppu) || SPR_ENABLED(ppu))
+	if (BG_ENABLED || SPR_ENABLED)
 	{
-		/*** Render lines ***/
-		if (SL_RENDER(ppu->scanline) || SL_PRERENDER(ppu->scanline))
+		if (VISIBLE_LINE)
 		{
-			/* TODO: "garbage" NT fetches used by MMC5 */
-			if (CYC_RENDER(ppu->cycle) || CYC_PREFETCH(ppu->cycle))
+			if (VISIBLE_CYCLE)
 			{
-				ppu->bg_attr1 <<= 1;
-				ppu->bg_attr2 <<= 1;
-
-				ppu->bg_bmp1 <<= 1;
-				ppu->bg_bmp2 <<= 1;
-
-				/* TODO: have this function return a pixel value? */
-				bg_fetch_tile(ppu);
-			}
-
-			/* TODO: this still happens if rendering is disabled!
-			   (fixing this will probably cause incorrect sprite overflow behavior
-			   (it shouldn't happen when rendering is disabled)) */
-			if (SL_RENDER(ppu->scanline) && ppu->cycle < 257)
+				draw(ppu, screen);
 				find_sprites(ppu);
-
-			/* TODO: have this function return a pixel value? */
-			if (ppu->cycle > 256 && ppu->cycle < 321)
-				fetch_next_sprite(ppu);
-
-			/* End of line */
-			if (ppu->cycle == 256)
-			{
-				scroll_inc_y(ppu);
 			}
+			if (ppu->cycle >= 257 && ppu->cycle <= 320)
+				fetch_sprite_data(ppu);
+		}
+		if (VISIBLE_LINE || PRERENDER_LINE)
+		{
+			if (VISIBLE_CYCLE || PREFETCH_CYCLE)
+			{
+				ppu->bg_attr_lo <<= 1;
+				ppu->bg_attr_hi <<= 1;
+				ppu->bg_bmp_lo <<= 1;
+				ppu->bg_bmp_hi <<= 1;
+				fetch_bg_data(ppu);
+			}
+			if (ppu->cycle == 256)  /* End of visible line. Move down a row */
+				inc_y(ppu);
 			else if (ppu->cycle == 257)
 			{
 				/* Update v with horizontal data
@@ -744,39 +593,110 @@ void ppu_step(PPU* ppu, RenderSurface screen)
 				ppu->v = (ppu->v & 0x7BE0) | (ppu->t & 0x41F);
 			}
 		}
-
-		if (SL_PRERENDER(ppu->scanline) && ppu->cycle > 279 && ppu->cycle < 305)
+		if (PRERENDER_LINE && ppu->cycle >= 280 && ppu->cycle <= 304)
 		{
 			/* Update v with vertical data
 			   v: IHGF.ED CBA..... = t: IHGF.ED CBA..... */
 			ppu->v = (ppu->v & 0x41F) | (ppu->t & 0x7BE0);
 		}
-
-		if (SL_RENDER(ppu->scanline) && ppu->cycle > /*0*/-1 && ppu->cycle < 257)
-			draw(ppu, screen);
 	}
-
-	if (VBLANK_START(ppu))
+	if (VBLANK_START)
 	{
 		renderer_flip_surface(screen);
 		ppu->vblank_started = 1;
-		if (NMI_ENABLED(ppu))
+
+		/* TODO: NMI delay */
+		if (NMI_ENABLED)
 			cpu_interrupt(&ppu->nes->cpu, INT_NMI);
 	}
-
-	/* Pre-render line (end of VBlank) */
-	/* TODO: different length depending on even/odd */
-	if (SL_PRERENDER(ppu->scanline) && ppu->cycle == 1)
+	else if (PRERENDER_LINE)
 	{
-		ppu->vblank_started = 0;
-		ppu->szero_hit = 0;
-		ppu->spr_overflow = 0;
+		/* TODO: if the sprite address (OAMADDR, $2003) is not zero at the
+		   beginning of the pre-render scanline, on the 2C02 an OAM hardware
+		   refresh bug will cause the first 8 bytes of OAM to be overwritten
+		   by the 8 bytes beginning at OAMADDR & $F8 before sprite evaluation
+		   begins */
+		if (ppu->cycle == 1)
+		{
+			/* End of vblank */
+			ppu->vblank_started = 0;
+			ppu->spr0_hit = 0;
+			ppu->spr_overflow = 0;
+		}
+		else if (ppu->cycle == 339 && ppu->odd_frame && (BG_ENABLED || SPR_ENABLED))
+		{
+			/* Cycle skipped on odd frames */
+			ppu->scanline = 0;
+			ppu->cycle = 0;
+			ppu->odd_frame = 0;
+			return;
+		}
 	}
-
-	/* Scanline is over */
-	if (++ppu->cycle == 342)
+	if (++ppu->cycle == 341)
 	{
-		ppu->scanline = (ppu->scanline + 1)%262;
+		/* Scanline is over */
+		ppu->scanline = (ppu->scanline + 1) % 262;
+		if (ppu->scanline == 0)
+			ppu->odd_frame ^= 1;
 		ppu->cycle = 0;
+	}
+}
+
+void ppu_init(PPU* ppu, NES* nes)
+{
+	memset(ppu, 0, sizeof(*ppu));
+	ppu->nes = nes;
+}
+
+/* PPU access via memory-mapped registers */
+void ppu_write(PPU* ppu, uint16_t addr, uint8_t val)
+{
+	ppu->io_latch = val;
+	switch (addr)
+	{
+		case 0x2000:
+			ppuctrl_write(ppu, val);
+			break;
+		case 0x2001:
+			ppumask_write(ppu, val);
+			break;
+		case 0x2003:
+			oamaddr_write(ppu, val);
+			break;
+		case 0x2004:
+			oamdata_write(ppu, val);
+			break;
+		case 0x2005:
+			ppuscroll_write(ppu, val);
+			break;
+		case 0x2006:
+			ppuaddr_write(ppu, val);
+			break;
+		case 0x2007:
+			ppudata_write(ppu, val);
+			break;
+		case 0x4014:
+			oamdma_write(ppu, val);
+			break;
+		default:
+			fprintf(stderr, "Warning: invalid PPU write address ($%04X)\n", addr);
+			break;
+	}
+}
+uint8_t ppu_read(PPU* ppu, uint16_t addr)
+{
+	switch (addr)
+	{
+		case 0x2002:
+			return ppustatus_read(ppu);
+		case 0x2004:
+			return oamdata_read(ppu);
+		case 0x2007:
+			return ppudata_read(ppu);
+		default:
+			/* Reading from write-only registers returns
+			   last value written to the PPU */
+			fprintf(stderr, "Warning: invalid PPU read address ($%04X)\n", addr);
+			return ppu->io_latch;
 	}
 }
