@@ -1,7 +1,6 @@
 /* Ricoh 2C02 PPU (picture processing unit) emulator.
    Provides NES graphics data manipulation, processing, and output */
 
-#include <stdint.h>
 #include <stdio.h>
 
 #include "game.h"
@@ -34,7 +33,7 @@
 /* Helper macros for rendering */
 #define VISIBLE_LINE (ppu->scanline < 240)
 #define PRERENDER_LINE (ppu->scanline == 261)
-#define VISIBLE_CYCLE (ppu->cycle > 0 && ppu->cycle < 257)
+#define VISIBLE_CYCLE (ppu->cycle >= 1 && ppu->cycle <= 256)
 #define PREFETCH_CYCLE (ppu->cycle >= 321 && ppu->cycle <= 336)
 #define SPRITE_FETCH_CYCLE (ppu->cycle >= 257 && ppu->cycle <= 320)
 #define VBLANK_START (ppu->scanline == 241 && ppu->cycle == 1)
@@ -329,8 +328,8 @@ static uint8_t get_spr_sliver(PPU* ppu, uint8_t sidx, uint8_t hb)
 
 		/* 8x16 sprites use tile bit 0 for pattern table select. Bits 1-7 are
 		   used for top tile number. Bottom tile is next in the pattern table. */
-		addr = (tidx & 1) * 0x1000;
-		tidx = (tidx & 0xFE) + (y / 8);
+		addr = (tidx & 1) << 12;
+		tidx = (tidx & 0xFE) + ((y & 8) >> 3);
 		y &= 7;  /* Keep y relative to tile being rendered (not sprite) */
 	}
 	else
@@ -451,7 +450,10 @@ void find_sprites(PPU* ppu)
 
 				/* Fewer than 8 sprites found */
 				if (ppu->soam_idx < 32)
+				{
 					ppu->soam[ppu->soam_idx] = ppu->oam_buf;
+					ppu->spr_indices[ppu->soam_idx/4] = ppu->oamaddr/4;
+				}
 				else
 				{
 					/* 2C02 hardware bug! Will result in OAMADDR being
@@ -492,6 +494,7 @@ void fetch_sprite_data(PPU* ppu)
 			spr->flip_x = attr & 0x40;
 			spr->flip_y = attr & 0x80;
 			spr->x = ppu->soam[(sidx * 4) + 3];
+			spr->idx = ppu->spr_indices[sidx];
 			spr->bmp_lo = get_spr_sliver(ppu, sidx, 0);
 			break;
 		}
@@ -545,8 +548,7 @@ void draw(PPU* ppu, RenderSurface screen)
 					   the same pixel */
 					/* TODO: doesn't happen at x=255 */
 					/* TODO: check sprite is actually sprite 0: OAM may change. memcmp approach isn't reliable */
-					ppu->spr0_hit = ppu->spr0_hit || (bg_pal_idx != 0 &&
-									 memcmp(ppu->oam, ppu->soam + i, 4) == 0);
+					ppu->spr0_hit = ppu->spr0_hit || (bg_pal_idx != 0 && spr->idx == 0);
 					if (bg_pal_idx == 0 || !spr->back_priority)
 						color = ppu_mem_read(ppu, 0x3F10 | ((spr->palette * 4) + pidx));
 					break;

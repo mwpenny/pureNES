@@ -11,6 +11,7 @@ typedef struct {
 		uint8_t flip_y;
 		uint8_t x;
 		uint8_t bmp_lo, bmp_hi;
+		uint8_t idx;
 } Sprite;
 
 typedef struct {
@@ -57,6 +58,7 @@ typedef struct {
 		Byte 3: sprite x position */
 	uint8_t oam[256];
 	uint8_t soam[32];    /* Secondary OAM */
+	uint8_t spr_indices[8];
 	uint8_t vram[2048];  /* i.e., nametables */
 	uint8_t pram[32];    /* Palette memory */
 
