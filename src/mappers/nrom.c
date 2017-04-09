@@ -1,21 +1,18 @@
-#include <stdint.h>
+/* NROM mapper (iNES mapper 0):
+	-16KB or 32KB PRG ROM (no bankswitching)
+*/
 
-#include "../game.h"
+#include "../cartridge.h"
 #include "../mapper.h"
 
-static void init(Game* game)
+static void reset(Mapper* mapper)
 {
-	game->prg_bank1 = game->prg_mem;
-	/* NROM-128: mirror first PRG bank into second */
-	if (game->prg_rom_banks == 1)
-		game->prg_bank2 = game->prg_mem;
-	else
-		game->prg_bank2 = game->prg_mem + 0x4000;
-
-	game->chr_bank1 = game->chr_mem;
-	game->chr_bank2 = game->chr_mem + 0x1000;
+	mapper->prg_rom_banks.banks[0] = mapper->cartridge->prg_rom;
+	mapper->prg_ram_banks.banks[0] = mapper->cartridge->prg_ram;
+	mapper->chr_banks.banks[0] = mapper->cartridge->chr;
+	mapper->prg_rom_banks.bank_size = mapper->cartridge->prg_rom_size;
 }
 
-static void write(Game* game, uint16_t addr, uint8_t val) {};
+static void write(Mapper* mapper, uint16_t addr, uint8_t val) {}
 
-Mapper mapper_nrom = {init, write};
+MapperConfig mapper_conf_nrom = {1, 1, 1, reset, write};

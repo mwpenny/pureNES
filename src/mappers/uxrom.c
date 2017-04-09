@@ -1,24 +1,25 @@
-#include <stdint.h>
+/* UxROM mapper (iNES mapper 2):
+	-2 16KB PRG ROM banks
+	  -First is switchable
+	  -Second is fixed to the last 16KB of PRG ROM
+*/
 
-#include "../game.h"
+#include "../cartridge.h"
 #include "../mapper.h"
 
-static void init(Game* game)
+static void reset(Mapper* mapper)
 {
-	game->prg_bank1 = game->prg_mem;
-	game->prg_bank2 = game->prg_mem + 0x4000*(game->prg_rom_banks-1);
-	game->chr_bank1 = game->chr_mem;
-	game->chr_bank2 = game->chr_mem + 0x1000;
+	mapper->prg_rom_banks.banks[0] = mapper->cartridge->prg_rom;
+	mapper->prg_rom_banks.banks[1] = mapper->cartridge->prg_rom + mapper->cartridge->prg_rom_size - 0x4000;
+	mapper->prg_ram_banks.banks[0] = mapper->cartridge->prg_ram;
+	mapper->chr_banks.banks[0] = mapper->cartridge->chr;
 }
 
-static void write(Game* game, uint16_t addr, uint8_t val)
+static void write(Mapper* mapper, uint16_t addr, uint8_t val)
 {
-	/* TODO: when does the bank switching actually occur on real hardware? */
-	if (addr > 0x7FFF && addr < 0x10000)
-	{
-		/* TODO: UNROM uses bits 2-0; UOROM uses bits 3-0 */
-		game->prg_bank1 = game->prg_mem + (val & 0xF)*0x4000;
-	}
+	/* Select region of ROM for bank 0 */
+	uint32_t ofs = ((val & 0xF) * 0x4000) % mapper->cartridge->prg_rom_size;
+	mapper->prg_rom_banks.banks[0] = mapper->cartridge->prg_rom + ofs;
 }
 
-Mapper mapper_uxrom = {init, write};
+MapperConfig mapper_conf_uxrom = {2, 1, 1, reset, write};

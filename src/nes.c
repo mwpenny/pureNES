@@ -1,8 +1,8 @@
 #include <string.h>
 #include <stdlib.h>
 
+#include "cartridge.h"
 #include "nes.h"
-#include "game.h"
 
 #include "controller.h"
 #include "controllers/keyboard.h"
@@ -20,7 +20,7 @@ void nes_init(NES* nes)
 
 void nes_load_rom(NES* nes, char* path)
 {
-	game_load(&nes->game, path);
+	cartridge_load(&nes->cartridge, path);
 
 	/* Start system */
 	cpu_power(&nes->cpu);
@@ -28,17 +28,16 @@ void nes_load_rom(NES* nes, char* path)
 
 void nes_update(NES* nes, SDL_Surface* screen)
 {
-	int ppu_cycles, i = 0;
+	int cycles = 0, i = 0;
 	if (nes->cpu.is_running)
-		ppu_cycles = cpu_step(&nes->cpu)*3;
-	else
-		ppu_cycles = 1;
+		cycles = cpu_step(&nes->cpu);
 
-	for (; i < ppu_cycles; ++i)
-		ppu_step(&nes->ppu, screen);
-
-	for (i = 0; i < ppu_cycles/3; ++i)
+	/* TODO: do APU and PPU still run when the CPU is halted? */
+	for (i = 0; i < cycles; ++i)
 		apu_tick(&nes->apu);
+
+	for (i = 0; i < cycles*3; ++i)
+		ppu_tick(&nes->ppu, screen);
 
 	/* TODO: move this out of emulator (make a front-end which links to the emu core) */
 	controller_update(&nes->c1);

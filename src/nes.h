@@ -7,7 +7,7 @@
 #include "ppu.h"
 #include "apu.h"
 #include "controller.h"
-#include "game.h"
+#include "cartridge.h"
 #include "mapper.h"
 
 #include <SDL.h>
@@ -22,7 +22,7 @@ typedef struct NES
 	Controller c1;
 	Controller c2;
 	uint8_t ram[RAMSIZE];	
-	Game game;
+	Cartridge cartridge;
 } NES;
 
 void nes_init(NES* nes);

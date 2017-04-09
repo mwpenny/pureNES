@@ -3,7 +3,7 @@
 
 #include <stdio.h>
 
-#include "game.h"
+#include "cartridge.h"
 #include "memory.h"
 #include "nes.h"
 #include "ppu.h"
@@ -53,16 +53,14 @@ static uint32_t palette[64] =
 
 static uint8_t* dispatch_address(PPU* ppu, uint16_t addr)
 {
-	if (addr < 0x1000)
-		return &ppu->nes->game.chr_bank1[addr];
-	else if (addr < 0x2000)
-		return &ppu->nes->game.chr_bank2[addr - 0x1000];
+	if (addr < 0x2000)
+		return mapper_get_banked_mem(&ppu->nes->cartridge.mapper.chr_banks, addr);
 	else if (addr < 0x3F00)
 	{
 		/* Nametable mirroring */
-		if (ppu->nes->game.mirror_mode == MIRRORING_VERTICAL)
+		if (ppu->nes->cartridge.mirror_mode == MIRRORING_VERTICAL)
 			return &ppu->vram[addr & 0x7FF];
-		else if (ppu->nes->game.mirror_mode == MIRRORING_HORIZONTAL)
+		else if (ppu->nes->cartridge.mirror_mode == MIRRORING_HORIZONTAL)
 			return &ppu->vram[addr & 0x3FF | ((addr & 0x800) >> 1)];
 		else
 		{
@@ -92,6 +90,7 @@ static uint8_t ppu_mem_read(PPU* ppu, uint16_t addr)
 
 static void ppu_mem_write(PPU* ppu, uint16_t addr, uint8_t val)
 {
+	/* TODO: disallow writes to CHR-ROM */
 	*dispatch_address(ppu, addr) = val;
 }
 
