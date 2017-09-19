@@ -7,6 +7,7 @@
 
 /* TODO: When the CPU writes to the serial port on consecutive cycles, the MMC1 ignores all writes but the first. */
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 

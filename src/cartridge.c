@@ -1,5 +1,6 @@
 /* Reads in NES ROM files (iNES ROMS only, for now) */
 
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -35,7 +36,7 @@ int cartridge_load(Cartridge* cart, char* path)
 	FILE* rom;
 	uint8_t header[16];
 	uint8_t mapper_num;
-	uint8_t rom_start_ofs = 0;
+	uint16_t rom_start_ofs = 0;
 	long file_size;
 	memset(cart, 0, sizeof(Cartridge));
 

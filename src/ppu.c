@@ -61,7 +61,7 @@ static uint8_t* dispatch_address(PPU* ppu, uint16_t addr)
 		if (ppu->nes->cartridge.mirror_mode == MIRRORING_VERTICAL)
 			return &ppu->vram[addr & 0x7FF];
 		else if (ppu->nes->cartridge.mirror_mode == MIRRORING_HORIZONTAL)
-			return &ppu->vram[addr & 0x3FF | ((addr & 0x800) >> 1)];
+			return &ppu->vram[(addr & 0x3FF) | ((addr & 0x800) >> 1)];
 		else
 		{
 			/* TODO: 4-screen mirroring and single-screen mirroring */

@@ -798,7 +798,8 @@ static void update_eff_addr(CPU* cpu)
 
 		/* Relative addressing: effective address is PC + the next byte */
 		case AMODE_REL:
-			cpu->eff_addr = (int8_t)memory_get(cpu->nes, cpu->pc++) + cpu->pc;
+			cpu->eff_addr = (int8_t)memory_get(cpu->nes, cpu->pc);
+			cpu->eff_addr += ++cpu->pc;
 			break;
 
 		/* Absolute addressing: the effective address is the next two bytes */

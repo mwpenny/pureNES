@@ -11,6 +11,8 @@ typedef struct {
 	uint16_t bank_size;
 } MemoryBanks;
 
+struct Mapper;
+
 typedef void (*MapperResetFunc)(struct Mapper* mapper);
 typedef void (*MapperWriteFunc)(struct Mapper* mapper, uint16_t addr, uint8_t val);
 
