@@ -12,11 +12,12 @@ typedef int (*MapperInitializer)(Mapper* mapper);
 
 /* Implemented mappers */
 int nrom_init(Mapper* mapper);
+int mmc1_init(Mapper* mapper);
 int uxrom_init(Mapper* mapper);
 
 static MapperInitializer initializers[256] =
 {
-	nrom_init, NULL, uxrom_init, NULL, NULL, NULL, NULL, NULL,
+	nrom_init, mmc1_init, uxrom_init, NULL, NULL, NULL, NULL, NULL,
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
