@@ -3,9 +3,11 @@
 
 #include <stdint.h>
 
-#define INT_RST 0x01
-#define INT_NMI 0x02
-#define INT_IRQ 0x04
+typedef enum {
+	INT_RST = 1,
+	INT_NMI = 2,
+	INT_IRQ = 3
+} Interrupt;
 
 typedef enum {
 	AMODE_ACC,  /* Accumulator addressing */
@@ -46,7 +48,7 @@ void cpu_init(CPU* cpu, struct NES* nes);
 void cpu_power(CPU* cpu);
 void cpu_reset(CPU* cpu);
 uint16_t cpu_step(CPU* cpu);
-void cpu_interrupt(CPU* cpu, uint8_t type);
+void cpu_interrupt(CPU* cpu, Interrupt type);
 /*oid cpu_begin_oam_dma(CPU* cpu, uint16_t addr_start);*/
 
 #endif

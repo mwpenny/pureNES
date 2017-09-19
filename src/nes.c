@@ -1,11 +1,10 @@
-#include <string.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "cartridge.h"
-#include "nes.h"
-
 #include "controller.h"
 #include "controllers/keyboard.h"
+#include "nes.h"
 
 void nes_init(NES* nes)
 {
@@ -18,12 +17,14 @@ void nes_init(NES* nes)
 	controller_kb_init(&nes->c2);
 }
 
-void nes_load_rom(NES* nes, char* path)
+int nes_load_rom(NES* nes, char* path)
 {
-	cartridge_load(&nes->cartridge, path);
+	if (cartridge_load(&nes->cartridge, path) != 0)
+		return -1;
 
 	/* Start system */
 	cpu_power(&nes->cpu);
+	return 0;
 }
 
 void nes_update(NES* nes, SDL_Surface* screen)
@@ -39,7 +40,7 @@ void nes_update(NES* nes, SDL_Surface* screen)
 	for (i = 0; i < cycles*3; ++i)
 		ppu_tick(&nes->ppu, screen);
 
-	/* TODO: move this out of emulator (make a front-end which links to the emu core) */
+	/* TODO: move this out of emulator (front-end which links to the emu core) */
 	controller_update(&nes->c1);
 	/*controller_update(&nes->c2);*/
 }

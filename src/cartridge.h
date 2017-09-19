@@ -5,6 +5,10 @@
 
 #include "mapper.h"
 
+#define ADDRESSABLE_PRG_ROM 0x8000
+#define ADDRESSABLE_PRG_RAM 0x2000
+#define ADDRESSABLE_CHR 0x2000
+
 typedef enum {
 	MIRRORING_VERTICAL,
 	MIRRORING_HORIZONTAL,
@@ -16,17 +20,21 @@ typedef enum {
 	VIDEO_PAL
 } VideoMode;
 
+typedef struct {
+	uint8_t* data;
+	uint32_t size;
+} Memory;
+
 typedef struct Cartridge
 {
 	MirrorMode mirror_mode;
 	VideoMode video_mode;
 	Mapper mapper;
 	uint8_t has_nvram;
-	uint8_t *prg_rom, *prg_ram, *chr;
-	uint32_t prg_rom_size, prg_ram_size, chr_size;
+	Memory prg_rom, prg_ram, chr;
 } Cartridge;
 
-void cartridge_load(Cartridge* cart, char* path);
+int cartridge_load(Cartridge* cart, char* path);
 void cartridge_unload(Cartridge* cart);
 
 uint8_t cartridge_read(Cartridge* cart, uint16_t addr);

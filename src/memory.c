@@ -26,9 +26,9 @@
 uint8_t memory_get(NES* nes, uint16_t addr)
 {
 	if (addr < 0x2000)
-		return nes->ram[addr & 0x7FF];
+		return nes->ram[addr % RAMSIZE];
 	else if (addr < 0x4000)
-		return ppu_read(&nes->ppu, addr%8 + 0x2000);
+		return ppu_read(&nes->ppu, 0x2000 | (addr % 8));
 	else if (addr == 0x4015)
 		return apu_read(&nes->apu, addr);
 	else if (addr == 0x4016)
@@ -56,7 +56,7 @@ uint16_t memory_get16_ind(NES* nes, uint16_t addr)
 	/* The 6502 doesn't handle page boundary crosses for indirect addressing
 	   properly (e.g. JMP ($80FF) will fetch the high byte from $8000,
 	   NOT $8100!) */
-	uint16_t hi_addr = (addr & 0xFF00) | (uint8_t)((addr & 0xFF)+1);
+	uint16_t hi_addr = (addr & 0xFF00) | (uint8_t)((addr & 0xFF) + 1);
 	return memory_get(nes, addr) | (memory_get(nes, hi_addr) << 8);
 }
 
@@ -64,7 +64,7 @@ void memory_set(NES* nes, uint16_t addr, uint8_t val)
 {
 	/* TODO: disallow writing into read-only memory */
 	if (addr < 0x2000)
-		nes->ram[addr & 0x7FF] = val;
+		nes->ram[addr % RAMSIZE] = val;
 	else if (addr < 0x4000 || addr == 0x4014)
 		ppu_write(&nes->ppu, addr, val);
 	else if (addr == 0x4016)

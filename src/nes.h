@@ -3,14 +3,14 @@
 
 #include <stdint.h>
 
-#include "cpu.h"
-#include "ppu.h"
-#include "apu.h"
-#include "controller.h"
-#include "cartridge.h"
-#include "mapper.h"
-
 #include <SDL.h>
+
+#include "apu.h"
+#include "cartridge.h"
+#include "controller.h"
+#include "cpu.h"
+#include "mapper.h"
+#include "ppu.h"
 
 #define RAMSIZE 0x800
 
@@ -26,7 +26,7 @@ typedef struct NES
 } NES;
 
 void nes_init(NES* nes);
-void nes_load_rom(NES* nes, char* path);
+int nes_load_rom(NES* nes, char* path);
 void nes_update(NES* nes, SDL_Surface* screen);
 
 #endif

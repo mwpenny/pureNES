@@ -2,6 +2,7 @@
 #define MEMORY_H
 
 #include <stdint.h>
+
 #include "nes.h"
 
 uint8_t memory_get(NES* nes, uint16_t addr);

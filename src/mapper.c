@@ -1,4 +1,4 @@
-/* Custom cartridge hardware (i.e., for bank switching) */
+/* Custom cartridge hardware */
 
 #include <stdint.h>
 #include <stdio.h>
@@ -8,13 +8,15 @@
 #include "cartridge.h"
 #include "mapper.h"
 
-/* Implemented mappers */
-extern MapperConfig mapper_conf_nrom;
-extern MapperConfig mapper_conf_uxrom;
+typedef int (*MapperInitializer)(Mapper* mapper);
 
-static MapperConfig* mapper_configs[256] = 
+/* Implemented mappers */
+int nrom_init(Mapper* mapper);
+int uxrom_init(Mapper* mapper);
+
+static MapperInitializer initializers[256] =
 {
-	&mapper_conf_nrom, NULL, &mapper_conf_uxrom, NULL, NULL, NULL, NULL, NULL,
+	nrom_init, NULL, uxrom_init, NULL, NULL, NULL, NULL, NULL,
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
@@ -48,45 +50,57 @@ static MapperConfig* mapper_configs[256] =
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
 };
 
-void mapper_init(Mapper* mapper, struct Cartridge* cart, uint8_t mapper_num)
+static int alloc_banks(MemoryBanks* banks, uint16_t addressable_memory)
 {
-	MapperConfig* conf = mapper_configs[mapper_num];
-
-	if (!conf)
+	banks->banks = (uint8_t**)malloc(banks->bank_count * sizeof(uint8_t*));
+	if (!banks->banks)
 	{
-		fprintf(stderr, "Unsupported mapper (%d)\n", mapper_num);
-		exit(EXIT_FAILURE);
+		return -1;
 	}
-	if (!(mapper->prg_rom_banks.banks = (uint8_t**)malloc(conf->prg_rom_bank_count * sizeof(uint8_t*))))
-	{
-		fprintf(stderr, "Error: unable to allocate memory for PRG ROM bank offsets (%s)\n", strerror(errno));
-		exit(EXIT_FAILURE);
-	}
-	if (!(mapper->prg_ram_banks.banks = (uint8_t**)malloc(conf->prg_ram_bank_count * sizeof(uint8_t*))))
-	{
-		fprintf(stderr, "Error: unable to allocate memory for PRG RAM bank offsets (%s)\n", strerror(errno));
-		exit(EXIT_FAILURE);
-	}
-	if (!(mapper->chr_banks.banks = (uint8_t**)malloc(conf->chr_bank_count * sizeof(uint8_t*))))
-	{
-		fprintf(stderr, "Error: unable to allocate memory for CHR bank offsets (%s)\n", strerror(errno));
-		exit(EXIT_FAILURE);
-	}
-	mapper->prg_rom_banks.bank_count = conf->prg_rom_bank_count;
-	mapper->prg_rom_banks.bank_size = 0x8000/conf->prg_rom_bank_count;
+	banks->bank_size = addressable_memory / banks->bank_count;
+	return 0;
+}
 
-	mapper->prg_ram_banks.bank_count = conf->prg_ram_bank_count;
-	mapper->prg_ram_banks.bank_size = 0x2000/conf->prg_ram_bank_count;
-
-	mapper->chr_banks.bank_count = conf->chr_bank_count;
-	mapper->chr_banks.bank_size = 0x2000/conf->chr_bank_count;
-
+int mapper_init(Mapper* mapper, struct Cartridge* cart, uint8_t mapper_num)
+{
+	MapperInitializer init = initializers[mapper_num];
+	if (!init)
+	{
+		fprintf(stderr, "Error: unsupported mapper (%d)\n", mapper_num);
+		return -1;
+	}
+	memset(mapper, 0, sizeof(Mapper));
 	mapper->cartridge = cart;
-	mapper->data = NULL;
-	mapper->reset = conf->reset;
-	mapper->write = conf->write;
 
-	conf->reset(mapper);
+	if (init(mapper) != 0)
+	{
+		fprintf(stderr, "Error: could not initialize mapper (code %d)\n", errno);
+		mapper_cleanup(mapper);
+		return -1;
+	}
+	if (alloc_banks(&mapper->prg_rom_banks, ADDRESSABLE_PRG_ROM) != 0)
+	{
+		fprintf(stderr, "Error: unable to allocate memory for PRG ROM bank offsets (code %d)\n", errno);
+		mapper_cleanup(mapper);
+		return -1;
+	}
+	if (alloc_banks(&mapper->prg_ram_banks, ADDRESSABLE_PRG_RAM) != 0)
+	{
+		fprintf(stderr, "Error: unable to allocate memory for PRG RAM bank offsets (code %d)\n", errno);
+		mapper_cleanup(mapper);
+		return -1;
+	}
+	if (alloc_banks(&mapper->chr_banks, ADDRESSABLE_CHR) != 0)
+	{
+		fprintf(stderr, "Error: unable to allocate memory for CHR bank offsets (code %d)\n", errno);
+		mapper_cleanup(mapper);
+		return -1;
+	}
+	mapper->prg_rom_banks.bank_size = ADDRESSABLE_PRG_ROM / mapper->prg_rom_banks.bank_count;
+	mapper->prg_ram_banks.bank_size = ADDRESSABLE_PRG_RAM / mapper->prg_ram_banks.bank_count;
+	mapper->chr_banks.bank_size = ADDRESSABLE_CHR / mapper->chr_banks.bank_count;
+	mapper->reset(mapper);
+	return 0;
 }
 
 void mapper_cleanup(Mapper* mapper)

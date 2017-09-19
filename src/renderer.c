@@ -4,11 +4,15 @@
 
 #include "renderer.h"
 
-void renderer_init_surface(RenderSurface* surface, char* title)
+int renderer_init_surface(RenderSurface* surface, char* title)
 {
-	*surface = SDL_SetVideoMode(800, 600, 32, SDL_SWSURFACE);
+	if (!(*surface = SDL_SetVideoMode(800, 600, 32, SDL_SWSURFACE)))
+	{
+		return -1;
+	}
 	SDL_WM_SetCaption(title, title);
 	/*SDL_Init(SDL_INIT_EVERYTHING);*/
+	return 0;
 }
 
 void render_pixel(RenderSurface screen, int x, int y, uint32_t color)

@@ -9,17 +9,29 @@
 
 static void reset(Mapper* mapper)
 {
-	mapper->prg_rom_banks.banks[0] = mapper->cartridge->prg_rom;
-	mapper->prg_rom_banks.banks[1] = mapper->cartridge->prg_rom + mapper->cartridge->prg_rom_size - 0x4000;
-	mapper->prg_ram_banks.banks[0] = mapper->cartridge->prg_ram;
-	mapper->chr_banks.banks[0] = mapper->cartridge->chr;
+	mapper->prg_rom_banks.banks[0] = mapper->cartridge->prg_rom.data;
+
+	/* Bank 1 is fixed to the last bank */
+	mapper->prg_rom_banks.banks[1] = mapper->cartridge->prg_rom.data + \
+									 mapper->cartridge->prg_rom.size - \
+									 mapper->prg_rom_banks.bank_size;
+	mapper->prg_ram_banks.banks[0] = mapper->cartridge->prg_ram.data;
+	mapper->chr_banks.banks[0] = mapper->cartridge->chr.data;
 }
 
 static void write(Mapper* mapper, uint16_t addr, uint8_t val)
 {
 	/* Select region of ROM for bank 0 */
-	uint32_t ofs = ((val & 0xF) * 0x4000) % mapper->cartridge->prg_rom_size;
-	mapper->prg_rom_banks.banks[0] = mapper->cartridge->prg_rom + ofs;
+	uint32_t ofs = ((val & 0xF) * 0x4000) % mapper->cartridge->prg_rom.size;
+	mapper->prg_rom_banks.banks[0] = mapper->cartridge->prg_rom.data + ofs;
 }
 
-MapperConfig mapper_conf_uxrom = {2, 1, 1, reset, write};
+int uxrom_init(Mapper* mapper)
+{
+	mapper->prg_rom_banks.bank_count = 2;
+	mapper->prg_ram_banks.bank_count = 1;
+	mapper->chr_banks.bank_count = 1;
+	mapper->reset = reset;
+	mapper->write = write;
+	return 0;
+}
