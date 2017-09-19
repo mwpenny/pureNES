@@ -12,7 +12,7 @@
    \ o [  ][  ]     |[][]| |/
     \_______________|XXXX|_/
 
-	Matt Penny 2015-2017
+	Matt Penny 2017
 */
 
 #include <errno.h>
