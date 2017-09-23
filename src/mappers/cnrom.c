@@ -1,9 +1,12 @@
-/* NROM (NES-NROM-128 and NES-NROM-256 boards; iNES mapper 0):
+/* CNROM board (and similar; iNES mapper 3):
 	-16KB or 32KB PRG ROM (no bankswitching)
+	-1 8KB CHR bank, switchable
 */
 
 #include "../cartridge.h"
 #include "../mapper.h"
+
+/* TODO: bus conflict related bugs in Cybernoid and Colorful Dragon */
 
 static void reset(Mapper* mapper)
 {
@@ -18,10 +21,12 @@ static void reset(Mapper* mapper)
 
 static void write(Mapper* mapper, uint16_t addr, uint8_t val)
 {
-	/* No bank switching or special logic */
+	/* Select CHR bank */
+	uint32_t ofs = (val * 0x2000) % mapper->cartridge->chr.size;
+	mapper->chr_banks.banks[0] = mapper->cartridge->chr.data + ofs;
 }
 
-int nrom_init(Mapper* mapper)
+int cnrom_init(Mapper* mapper)
 {
 	mapper->prg_rom_banks.bank_count = 1;
 	mapper->prg_ram_banks.bank_count = 1;

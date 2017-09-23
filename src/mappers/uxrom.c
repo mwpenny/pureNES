@@ -1,4 +1,5 @@
-/* UxROM mapper (iNES mapper 2):
+/* UxROM (NES-UNROM, NES-UOROM, HVC-UN1ROM their HVC counterparts, and
+   clone boards; iNES mapper 2):
 	-2 16KB PRG ROM banks
 	  -First is switchable
 	  -Second is fixed to the last 16KB of PRG ROM
