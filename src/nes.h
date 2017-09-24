@@ -9,7 +9,6 @@
 #include "cartridge.h"
 #include "controller.h"
 #include "cpu.h"
-#include "mapper.h"
 #include "ppu.h"
 
 #define RAMSIZE 0x800

@@ -27,7 +27,10 @@ typedef struct Mapper {
 int mapper_init(Mapper* mapper, struct Cartridge* cart, uint8_t mapper_num);
 void mapper_cleanup(Mapper* mapper);
 
+void mapper_set_prg_rom_bank(Mapper* mapper, uint8_t bank_slot, int16_t bank_num);
+void mapper_set_prg_ram_bank(Mapper* mapper, uint8_t bank_slot, int16_t bank_num);
+void mapper_set_chr_bank(Mapper* mapper, uint8_t bank_slot, int16_t bank_num);
+
 uint8_t* mapper_get_banked_mem(MemoryBanks* banks, uint16_t addr);
-void mapper_write(Mapper* mapper, uint16_t addr, uint8_t val);
 
 #endif

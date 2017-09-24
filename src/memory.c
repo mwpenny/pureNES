@@ -2,7 +2,6 @@
 
 #include "apu.h"
 #include "controller.h"
-#include "mapper.h"
 #include "memory.h"
 #include "ppu.h"
 

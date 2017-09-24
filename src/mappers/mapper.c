@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "cartridge.h"
+#include "../cartridge.h"
 #include "mapper.h"
 
 typedef int (*MapperInitializer)(Mapper* mapper);
@@ -112,6 +112,35 @@ void mapper_cleanup(Mapper* mapper)
 	free(mapper->prg_ram_banks.banks);
 	free(mapper->chr_banks.banks);
 	free(mapper->data);
+}
+
+static void mapper_set_bank(MemoryBanks* banks, Memory* mem, uint8_t bank_slot, int16_t bank_num)
+{
+	uint32_t ofs = (bank_num * banks->bank_size) % mem->size;
+	banks->banks[bank_slot % banks->bank_count] = mem->data + ofs;
+}
+
+void mapper_set_prg_rom_bank(Mapper* mapper, uint8_t bank_slot, int16_t bank_num)
+{
+	mapper_set_bank(&mapper->prg_rom_banks,
+					&mapper->cartridge->prg_rom,
+					bank_slot,
+					bank_num);
+}
+void mapper_set_prg_ram_bank(Mapper* mapper, uint8_t bank_slot, int16_t bank_num)
+{
+	mapper_set_bank(&mapper->prg_ram_banks,
+					&mapper->cartridge->prg_ram,
+					bank_slot,
+					bank_num);
+}
+
+void mapper_set_chr_bank(Mapper* mapper, uint8_t bank_slot, int16_t bank_num)
+{
+	mapper_set_bank(&mapper->chr_banks,
+					&mapper->cartridge->chr,
+					bank_slot,
+					bank_num);
 }
 
 uint8_t* mapper_get_banked_mem(MemoryBanks* banks, uint16_t addr)

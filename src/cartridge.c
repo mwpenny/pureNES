@@ -7,7 +7,6 @@
 #include <stdio.h>
 
 #include "cartridge.h"
-#include "mapper.h"
 
 #define max(x, y) ((x) > (y) ? (x) : (y))
 

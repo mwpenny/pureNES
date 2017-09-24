@@ -12,26 +12,31 @@
 #include <stdlib.h>
 
 #include "../cartridge.h"
-#include "../mapper.h"
+#include "mapper.h"
+
+typedef enum {
+	BANK_MODE_SINGLE,
+	BANK_MODE_DOUBLE
+} BankMode;
 
 typedef struct {
 	uint8_t shift_reg;
-	uint8_t** swappable_prg_rom_bank;
+	uint8_t swappable_prg_rom_bank;
+	BankMode prg_bank_mode, chr_bank_mode;
 } MMC1Data;
 
 static void fix_prg_rom_bank0(Mapper* mapper)
 {
 	/* Bank1 swappable, bank0 fixed to first bank */
-	mapper->prg_rom_banks.banks[0] = mapper->cartridge->prg_rom.data;
-	((MMC1Data*)mapper->data)->swappable_prg_rom_bank = &mapper->prg_rom_banks.banks[1];
+	mapper_set_prg_rom_bank(mapper, 0, 0);
+	((MMC1Data*)mapper->data)->swappable_prg_rom_bank = 1;
 }
 
 static void fix_prg_rom_bank1(Mapper* mapper)
 {
 	/* Bank0 swappable, bank1 fixed to last bank */
-	uint32_t ofs = mapper->cartridge->prg_rom.size - mapper->prg_rom_banks.bank_size;
-	mapper->prg_rom_banks.banks[1] = mapper->cartridge->prg_rom.data + ofs;
-	((MMC1Data*)mapper->data)->swappable_prg_rom_bank = &mapper->prg_rom_banks.banks[0];
+	mapper_set_prg_rom_bank(mapper, 1, -1);
+	((MMC1Data*)mapper->data)->swappable_prg_rom_bank = 0;
 }
 
 /* Control register
@@ -47,6 +52,8 @@ static void fix_prg_rom_bank1(Mapper* mapper)
    +----- CHR ROM bank mode (0: switch 8 KB at a time; 1: switch two separate 4 KB banks) */
 static void write_reg_ctrl(Mapper* mapper, uint8_t val)
 {
+	MMC1Data* data = ((MMC1Data*)mapper->data);
+
 	/* Mirroring mode */
 	switch (val & 3)
 	{
@@ -67,20 +74,22 @@ static void write_reg_ctrl(Mapper* mapper, uint8_t val)
 	{
 		case 0:
 		case 1:
-			mapper->prg_rom_banks.bank_size = 0x8000;
+			data->prg_bank_mode = BANK_MODE_SINGLE;
 			break;
 		case 2:
-			mapper->prg_rom_banks.bank_size = 0x4000;
+			data->prg_bank_mode = BANK_MODE_DOUBLE;
 			fix_prg_rom_bank0(mapper);
 			break;
 		case 3:
-			mapper->prg_rom_banks.bank_size = 0x4000;
+			data->prg_bank_mode = BANK_MODE_DOUBLE;
 			fix_prg_rom_bank1(mapper);
 			break;
 	}
 
-	/* CHR bank switching mode */
-	mapper->chr_banks.bank_size = (val & 0x10) ? 0x1000 : 0x2000;
+	if (val & 0x10)
+		data->chr_bank_mode = BANK_MODE_DOUBLE;
+	else
+		data->chr_bank_mode = BANK_MODE_SINGLE;
 }
 
 static void write_reg_chr_bank0(Mapper* mapper, uint8_t val)
@@ -88,68 +97,56 @@ static void write_reg_chr_bank0(Mapper* mapper, uint8_t val)
 	/* Select 4KB or 8KB CHR bank at PPU $0000. In 8KB mode, even banks
 	   are used for bank0 and the following bank is used for bank1
 	   (in effect, one large bank) */
-	uint32_t ofs;
-	if (mapper->chr_banks.bank_size == 0x2000)
-		val &= 0x1E;
-	else
-		val &= 0x1F;
-	ofs = (val * mapper->chr_banks.bank_size) % mapper->cartridge->chr.size;
-	mapper->chr_banks.banks[0] = mapper->cartridge->chr.data + ofs;
-
-	/* Bank1 will not actually be read from in 8K mode since bank0's
-	   size was set to 8K, however, we want bank1 to follow bank0 in
-	   case CHR banking is switched back to 4K mode */
-	if (mapper->chr_banks.bank_size == 0x2000)
+	if (((MMC1Data*)mapper->data)->chr_bank_mode == BANK_MODE_SINGLE)
 	{
-		ofs = (ofs + 0x2000) % mapper->cartridge->chr.size;
-		mapper->chr_banks.banks[1] = mapper->cartridge->chr.data + ofs;
+		val = (val & 0x1E) * 2;
+		mapper_set_chr_bank(mapper, 0, val);
+		mapper_set_chr_bank(mapper, 1, val + 1);
+	}
+	else
+	{
+		mapper_set_chr_bank(mapper, 0, val & 0x1F);
 	}
 }
 
 static void write_reg_chr_bank1(Mapper* mapper, uint8_t val)
 {
 	/* Select 4KB CHR bank at PPU $1000 (ignored in 8KB mode) */
-	if (mapper->chr_banks.bank_size == 0x1000)
-	{
-		uint32_t ofs = (val * 0x1000) % mapper->cartridge->chr.size;
-		mapper->chr_banks.banks[1] = mapper->cartridge->chr.data + ofs;
-	}
+	if (((MMC1Data*)mapper->data)->chr_bank_mode == BANK_MODE_DOUBLE)
+		mapper_set_chr_bank(mapper, 1, val & 0x1F);
 }
 
 static void write_reg_prg_bank(Mapper* mapper, uint8_t val)
 {
 	/* Select 16KB or 32KB PRG ROM bank (low bit ignored in 32KB mode) */
-	uint32_t ofs;
-	if (mapper->prg_rom_banks.bank_size == 0x8000)
-		val &= 0xE;
-	else
-		val &= 0xF;
-	ofs = (val * mapper->prg_rom_banks.bank_size) % mapper->cartridge->prg_rom.size;
-
-	/* Both banks act as 1 in 32K mode */
-	if (mapper->prg_rom_banks.bank_size == 0x8000)
+	MMC1Data* data = ((MMC1Data*)mapper->data);
+	if (data->prg_bank_mode == BANK_MODE_SINGLE)
 	{
-		mapper->prg_rom_banks.banks[0] = mapper->cartridge->prg_rom.data + ofs;
-		ofs = (ofs + 0x4000) % mapper->cartridge->prg_rom.size;
-		mapper->prg_rom_banks.banks[1] = mapper->cartridge->prg_rom.data + ofs;
+		val = (val & 0xE) * 2;
+		mapper_set_prg_rom_bank(mapper, 0, val);
+		mapper_set_prg_rom_bank(mapper, 1, val + 1);
 	}
 	else
 	{
-		*((MMC1Data*)mapper->data)->swappable_prg_rom_bank = mapper->cartridge->prg_rom.data + ofs;
-	}	
+		mapper_set_prg_rom_bank(mapper, data->swappable_prg_rom_bank, val & 0xF);
+	}
 
 	/* TODO: 5th bit enables/disables PRG RAM (ignored on MMC1A) */
 }
 
 static void reset(Mapper* mapper)
 {
-	((MMC1Data*)mapper->data)->shift_reg = 0x80;
+	MMC1Data* data = ((MMC1Data*)mapper->data);
+	data->shift_reg = 0x80;
+	data->prg_bank_mode = BANK_MODE_DOUBLE;
+	data->chr_bank_mode = BANK_MODE_SINGLE;
+
+	mapper_set_prg_rom_bank(mapper, 0, 0);
 	fix_prg_rom_bank1(mapper);
-	mapper->prg_ram_banks.banks[0] = mapper->cartridge->prg_ram.data;
-	mapper->chr_banks.banks[0] = mapper->cartridge->chr.data;
-	mapper->chr_banks.banks[1] = mapper->cartridge->chr.data + \
-								 mapper->cartridge->chr.size - \
-								 mapper->chr_banks.bank_size;
+	mapper_set_prg_ram_bank(mapper, 0, 0);
+	mapper_set_chr_bank(mapper, 0, 0);
+	mapper_set_chr_bank(mapper, 1, 1);
+
 }
 
 static void write(Mapper* mapper, uint16_t addr, uint8_t val)

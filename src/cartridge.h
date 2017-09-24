@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-#include "mapper.h"
+#include "mappers/mapper.h"
 
 #define ADDRESSABLE_PRG_ROM 0x8000
 #define ADDRESSABLE_PRG_RAM 0x2000
