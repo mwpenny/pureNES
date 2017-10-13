@@ -57,9 +57,7 @@ static int alloc_banks(MemoryBanks* banks, uint16_t addressable_memory)
 {
 	banks->banks = (uint8_t**)malloc(banks->bank_count * sizeof(uint8_t*));
 	if (!banks->banks)
-	{
 		return -1;
-	}
 	banks->bank_size = addressable_memory / banks->bank_count;
 	return 0;
 }
@@ -99,9 +97,6 @@ int mapper_init(Mapper* mapper, struct Cartridge* cart, uint8_t mapper_num)
 		mapper_cleanup(mapper);
 		return -1;
 	}
-	mapper->prg_rom_banks.bank_size = ADDRESSABLE_PRG_ROM / mapper->prg_rom_banks.bank_count;
-	mapper->prg_ram_banks.bank_size = ADDRESSABLE_PRG_RAM / mapper->prg_ram_banks.bank_count;
-	mapper->chr_banks.bank_size = ADDRESSABLE_CHR / mapper->chr_banks.bank_count;
 	mapper->reset(mapper);
 	return 0;
 }
@@ -112,6 +107,7 @@ void mapper_cleanup(Mapper* mapper)
 	free(mapper->prg_ram_banks.banks);
 	free(mapper->chr_banks.banks);
 	free(mapper->data);
+	memset(mapper, 0, sizeof(Mapper));
 }
 
 static void mapper_set_bank(MemoryBanks* banks, Memory* mem, uint8_t bank_slot, int16_t bank_num)

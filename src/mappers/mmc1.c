@@ -25,20 +25,6 @@ typedef struct {
 	BankMode prg_bank_mode, chr_bank_mode;
 } MMC1Data;
 
-static void fix_prg_rom_bank0(Mapper* mapper)
-{
-	/* Bank1 swappable, bank0 fixed to first bank */
-	mapper_set_prg_rom_bank(mapper, 0, 0);
-	((MMC1Data*)mapper->data)->swappable_prg_rom_bank = 1;
-}
-
-static void fix_prg_rom_bank1(Mapper* mapper)
-{
-	/* Bank0 swappable, bank1 fixed to last bank */
-	mapper_set_prg_rom_bank(mapper, 1, -1);
-	((MMC1Data*)mapper->data)->swappable_prg_rom_bank = 0;
-}
-
 /* Control register
    4bit0
    -----
@@ -77,19 +63,19 @@ static void write_reg_ctrl(Mapper* mapper, uint8_t val)
 			data->prg_bank_mode = BANK_MODE_SINGLE;
 			break;
 		case 2:
+			/* Bank1 switchable, bank0 fixed to first bank */
 			data->prg_bank_mode = BANK_MODE_DOUBLE;
-			fix_prg_rom_bank0(mapper);
+			mapper_set_prg_rom_bank(mapper, 0, 1);
+			data->swappable_prg_rom_bank = 1;
 			break;
 		case 3:
+			/* Bank0 switchable, bank1 fixed to last bank */
 			data->prg_bank_mode = BANK_MODE_DOUBLE;
-			fix_prg_rom_bank1(mapper);
+			mapper_set_prg_rom_bank(mapper, 1, -1);
+			data->swappable_prg_rom_bank = 0;
 			break;
 	}
-
-	if (val & 0x10)
-		data->chr_bank_mode = BANK_MODE_DOUBLE;
-	else
-		data->chr_bank_mode = BANK_MODE_SINGLE;
+	data->chr_bank_mode = (val & 0x10) ? BANK_MODE_DOUBLE : BANK_MODE_SINGLE;
 }
 
 static void write_reg_chr_bank0(Mapper* mapper, uint8_t val)
@@ -140,13 +126,13 @@ static void reset(Mapper* mapper)
 	data->shift_reg = 0x80;
 	data->prg_bank_mode = BANK_MODE_DOUBLE;
 	data->chr_bank_mode = BANK_MODE_SINGLE;
+	data->swappable_prg_rom_bank = 0;
 
 	mapper_set_prg_rom_bank(mapper, 0, 0);
-	fix_prg_rom_bank1(mapper);
+	mapper_set_prg_rom_bank(mapper, 1, -1);
 	mapper_set_prg_ram_bank(mapper, 0, 0);
 	mapper_set_chr_bank(mapper, 0, 0);
 	mapper_set_chr_bank(mapper, 1, 1);
-
 }
 
 static void write(Mapper* mapper, uint16_t addr, uint8_t val)
@@ -161,8 +147,6 @@ static void write(Mapper* mapper, uint16_t addr, uint8_t val)
 	if (val & 0x80)
 	{
 		data->shift_reg = 0x80;
-		/*mapper->prg_rom_banks.bank_size = 0x4000;
-		fix_prg_rom_bank1(mapper);*/
 	}
 	else
 	{

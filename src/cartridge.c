@@ -79,11 +79,7 @@ int cartridge_load(Cartridge* cart, char* path)
 	else
 		cart->mirror_mode = MIRRORING_HORIZONTAL;
 	rom_start_ofs = (header[6] & 0x04) ? 0x200 : 0;  /* Skip over trainer */
-
-	if (header[9] & 0x01)
-		cart->video_mode = VIDEO_PAL;
-	else
-		cart->video_mode = VIDEO_NTSC;
+	cart->video_mode = (header[9] & 0x01) ? VIDEO_PAL : VIDEO_NTSC;
 
 	/* Load ROM */
 	if (!(cart->prg_rom.data = (uint8_t*)malloc(cart->prg_rom.size)))
@@ -137,6 +133,7 @@ void cartridge_unload(Cartridge* cart)
 	free(cart->prg_ram.data);
 	free(cart->chr.data);
 	mapper_cleanup(&cart->mapper);
+	memset(cart, 0, sizeof(Cartridge));
 }
 
 uint8_t cartridge_read(Cartridge* cart, uint16_t addr)
