@@ -29,13 +29,18 @@ int nes_load_rom(NES* nes, char* path)
 
 void nes_update(NES* nes, SDL_Surface* screen)
 {
-	int cycles = 0, i = 0;
+	uint16_t cycles = 0, i = 0;
 	if (nes->cpu.is_running)
 		cycles = cpu_step(&nes->cpu);
 
 	/* TODO: do APU and PPU still run when the CPU is halted? */
-	for (i = 0; i < cycles; ++i)
-		apu_tick(&nes->apu);
+	i = nes->cpu.cycles - cycles;
+	while (i < nes->cpu.cycles)
+	{
+		/* APU runs at half speed of CPU */
+		if (i++ % 2)
+			apu_tick(&nes->apu);
+	}
 
 	for (i = 0; i < cycles*3; ++i)
 		ppu_tick(&nes->ppu, screen);

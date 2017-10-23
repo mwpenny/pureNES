@@ -3,82 +3,38 @@
 
 #include <stdint.h>
 
-/* loop env flag naming */
-/* env vol/period naming */
-
 typedef struct {
-	uint16_t period;
 	uint16_t value;
+	uint16_t period;
 } Timer;
 
 typedef struct {
-	uint8_t duty;
-	uint8_t phase;
-	uint8_t lc_enabled;
-	uint8_t env_enabled;
-	uint8_t volume;
-
-	uint8_t sweep_enabled;
-	uint8_t sweep_period;
-	uint8_t sweep_negate;
-	uint8_t sweep_shift;
-
 	Timer timer;
-	uint8_t lc_load;
+	uint8_t duty_cycle;
+	uint8_t phase;
+
+	uint8_t length_counter;
+	uint8_t lc_halted;
+	uint8_t using_const_vol;
+	uint8_t vol_env;
 } PulseChannel;
 
 typedef struct {
-	uint8_t lc_enabled;
-	uint8_t lin_counter_reload;
-
-	Timer timer;
-	uint8_t lc_load;	
-} TriangleChannel;
-
-typedef struct {
-	uint8_t lc_enabled;
-	uint8_t env_enabled;
-	uint8_t volume;
-
-	uint8_t loop_enabled;
-	uint8_t period;
-
-	uint8_t lc_load;	
-} NoiseChannel;
-
-typedef struct {
-	uint8_t irq_enabled;
-	uint8_t loop_enabled;
-	uint8_t freq_idx;
-
-	uint8_t direct_load;
-
-	uint8_t sample_addr;
-
-	uint8_t sample_len;
-} DMCChannel;
-
-typedef struct {
 	struct NES* nes;
-
 	PulseChannel pulse1, pulse2;
-	TriangleChannel triangle;
-	NoiseChannel noise;
-	DMCChannel dmc;
-
-	uint8_t seq_mode;
-	uint8_t seq_step;
-	uint8_t irq_enabled;
-	uint16_t sample_rate;
-	uint16_t cycle;
+	uint32_t sample_buf_size;
+	uint32_t sample_buf_insert_pos;
+	uint32_t sample_buf_read_pos;
+	uint16_t *sample_buf1, *sample_buf2;
+	uint16_t *current_read_buf, *current_write_buf;
+	uint32_t read_buffer_filled;
+	uint32_t cycle;
 } APU;
 
-void apu_genwave();
-void apu_init(APU* apu, struct NES* nes);
+int apu_init(APU* apu, struct NES* nes);
 void apu_cleanup(APU* apu);
 void apu_write(APU* apu, uint16_t addr, uint8_t val);
 uint8_t apu_read (APU* apu, uint16_t addr);
 void apu_tick(APU* apu);
-
 
 #endif
