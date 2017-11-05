@@ -10,6 +10,16 @@ typedef struct {
 
 typedef struct {
 	Timer timer;
+	uint8_t enabled;
+	uint8_t negate;
+	uint8_t shift;
+	uint8_t reload;
+	uint16_t target;
+} Sweep;
+
+typedef struct {
+	Timer timer;
+	Sweep sweep;
 	uint8_t duty_cycle;
 	uint8_t phase;
 
@@ -19,16 +29,24 @@ typedef struct {
 	uint8_t vol_env;
 } PulseChannel;
 
+typedef enum {
+	FC_4STEP = 0,
+	FC_5STEP
+} FCSequence;
+
 typedef struct {
 	struct NES* nes;
 	PulseChannel pulse1, pulse2;
+	FCSequence fc_sequence;
+	uint8_t interrupt_enabled;
+
 	uint32_t sample_buf_size;
 	uint32_t sample_buf_insert_pos;
 	uint32_t sample_buf_read_pos;
 	uint16_t *sample_buf1, *sample_buf2;
 	uint16_t *current_read_buf, *current_write_buf;
 	uint32_t read_buffer_filled;
-	uint32_t cycle;
+	uint32_t cycles;
 } APU;
 
 int apu_init(APU* apu, struct NES* nes);

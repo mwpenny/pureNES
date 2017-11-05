@@ -92,6 +92,94 @@ void apu_cleanup(APU* apu)
 	/* TODO */
 }
 
+static void update_sweep_target(APU* apu, PulseChannel* channel)
+{
+	/* Calculate change amount for channel's period */
+	Sweep* sweep = &channel->sweep;
+	int16_t c = channel->timer.period >> sweep->shift;
+	if (sweep->negate)
+	{
+		c = -c;
+		if (channel == &apu->pulse1)
+			--c;
+	}
+	sweep->target = channel->timer.period + c;
+}
+
+static void clock_sweep(APU* apu, PulseChannel* channel)
+{
+	Sweep* sweep = &channel->sweep;
+
+	if (sweep->timer.value-- == 0)
+	{
+		sweep->timer.value = sweep->timer.period;
+		update_sweep_target(apu, channel);
+
+		/* Only update the channel if the target period is in range (not muted) */
+		if (sweep->enabled && sweep->shift > 0 && channel->timer.period >= 8 && sweep->target <= 0x7FF)
+			channel->timer.period = sweep->target;
+	}
+
+	if (sweep->reload)
+	{
+		sweep->timer.value = sweep->timer.period;
+		sweep->reload = 0;
+	}
+}
+
+static void clock_sequencer(APU* apu)
+{
+	/* Steps common to both the 4-step and 5-step sequence */
+	switch (apu->cycles)
+	{
+		case 7457:   /* Step 1 (after 3728.5 APU cycles) */
+			/* TODO: clock envelopes and triangle's linear counter */
+			break;
+		case 14913:  /* Step 2 (after 7456.5 APU cycles) */
+			/* TODO: clock envelopes and triangle's linear counter */
+			/* TODO: clock length counters */
+			clock_sweep(apu, &apu->pulse1);
+			clock_sweep(apu, &apu->pulse2);
+			break;
+		case 22371:  /* Step 3 (after 11185.5 APU cycles) */
+			/* TODO: clock envelopes and triangle's linear counter */
+			break;
+	}
+	if (apu->fc_sequence == FC_4STEP)
+	{
+		switch (apu->cycles)
+		{
+			case 29828:  /* First and third parts of step 4 (14914/14915 APU cycles) */
+				/* TODO: set frame interrupt flag if interupt inhibit is clear */
+				break;
+			case 29829:  /* Second part of step 4 (14914.5 APU cycles) */
+				/* TODO: clock envelopes and triangle's linear counter */
+				/* TODO: clock length counters */
+				/* TODO: set frame interrupt flag if interupt inhibit is clear */
+				clock_sweep(apu, &apu->pulse1);
+				clock_sweep(apu, &apu->pulse2);
+				break;
+			case 29830:
+				/* TODO: set frame interrupt flag if interupt inhibit is clear */
+				apu->cycles = 0;
+		}
+	}
+	else
+	{
+		switch (apu->cycles)
+		{
+			case 37281:  /* Step 5 (18640.5 APU cycles) */
+				/* TODO: clock envelopes and triangle's linear counter */
+				/* TODO: clock length counters */
+				clock_sweep(apu, &apu->pulse1);
+				clock_sweep(apu, &apu->pulse2);
+				break;
+			case 37282:
+				apu->cycles = 0;
+		}
+	}
+}
+
 /* 7  bit  0
    ---- ----
    DDLC VVVV
@@ -101,18 +189,31 @@ void apu_cleanup(APU* apu)
    |||        envelope period
    ||+------- Length counter halt (when set, pauses/silences channel)
    ++-------- Duty cycle select */
-static void pulse_flags1_write(PulseChannel* channel, uint8_t val)
+static void pulse_flags1_write(APU* apu, PulseChannel* channel, uint8_t val)
 {
 	channel->duty_cycle = PULSE_DUTY_CYCLES[(val >> 6) & 3];
 	channel->lc_halted = (val >> 5) & 1;
 	channel->using_const_vol = (val >> 4) & 1;
 	channel->vol_env = val & 0xF;
+	update_sweep_target(apu, channel);
+}
+
+static void pulse_sweep_write(APU* apu, PulseChannel* channel, uint8_t val)
+{
+	Sweep* sweep = &channel->sweep;
+	sweep->enabled = val >> 7;
+	sweep->timer.period = (val >> 4) & 7;
+	sweep->negate = (val >> 3) & 1;
+	sweep->shift = val & 7;
+	sweep->reload = 1;
+	update_sweep_target(apu, channel);
 }
 
 /* Pulse timer low byte ($4002/$4006) */
-static void pulse_flags3_write(PulseChannel* channel, uint8_t val)
+static void pulse_flags3_write(APU* apu, PulseChannel* channel, uint8_t val)
 {
 	channel->timer.period = (channel->timer.period & 0x700) | val;
+	update_sweep_target(apu, channel);
 }
 
 /* 7  bit  0
@@ -128,7 +229,7 @@ static void pulse_flags4_write(PulseChannel* channel, uint8_t val)
 	//channel->phase = 0;
 }
 
-static uint8_t pulse_tick(PulseChannel* channel)
+static uint8_t clock_pulse(PulseChannel* channel)
 {
 	/* Clock pulse waveform generator */
 	if (channel->timer.value-- == 0)
@@ -136,7 +237,28 @@ static uint8_t pulse_tick(PulseChannel* channel)
 		channel->timer.value = channel->timer.period;
 		channel->phase = (channel->phase + 1) & 7;
 	}
+	if (channel->timer.period < 8 || channel->sweep.target > 0x7FF)
+		return 0;
 	return channel->vol_env * ((channel->duty_cycle >> (7 - channel->phase)) & 1);
+}
+
+/* 7  bit  0
+   ---- ----
+   MI-- ----
+   |+-------- Interrupt inhibit flag
+   +--------- Sequencer mode (0: 4-step, 1: 5-step) */
+static void write_sequencer(APU* apu, uint8_t val)
+{
+	/* TODO: reset divider and sequencer */
+	/* TODO: After 3 or 4 CPU clock cycles*, the timer is reset */
+	/* TODO: If the mode flag is set, then both "quarter frame" and
+	   "half frame" signals are also generated. */
+
+	/* TODO: If the write occurs during an APU cycle, the effects occur
+	   3 CPU cycles after the $4017 write cycle, and if the write occurs
+	   between APU cycles, the effects occurs 4 CPU cycles after the write cycle */
+	apu->fc_sequence = (FCSequence)(val >> 7);
+	apu->interrupt_enabled = (val >> 6) & 1;
 }
 
 void apu_write(APU* apu, uint16_t addr, uint8_t val)
@@ -147,28 +269,31 @@ void apu_write(APU* apu, uint16_t addr, uint8_t val)
 	switch (addr)
 	{
 		case 0x4000:
-			pulse_flags1_write(&apu->pulse1, val);
+			pulse_flags1_write(apu, &apu->pulse1, val);
 			break;
-		/*case 0x4001:
-			pulse_flags2_write(&apu->pulse1, val);
-			break;*/
+		case 0x4001:
+			pulse_sweep_write(apu, &apu->pulse1, val);
+			break;
 		case 0x4002:
-			pulse_flags3_write(&apu->pulse1, val);
+			pulse_flags3_write(apu, &apu->pulse1, val);
 			break;
 		case 0x4003:
 			pulse_flags4_write(&apu->pulse1, val);
 			break;
 		case 0x4004:
-			pulse_flags1_write(&apu->pulse2, val);
+			pulse_flags1_write(apu, &apu->pulse2, val);
 			break;
-		/*case 0x4005:
-			pulse_flags2_write(&apu->pulse2, val);
-			break;*/
+		case 0x4005:
+			pulse_sweep_write(apu, &apu->pulse2, val);
+			break;
 		case 0x4006:
-			pulse_flags3_write(&apu->pulse2, val);
+			pulse_flags3_write(apu, &apu->pulse2, val);
 			break;
 		case 0x4007:
 			pulse_flags4_write(&apu->pulse2, val);
+			break;
+		case 0x4017:
+			write_sequencer(apu, val);
 			break;
 	}
 }
@@ -182,24 +307,31 @@ uint8_t apu_read(APU* apu, uint16_t addr)
 void apu_tick(APU* apu)
 {
 	/* TODO: safe threading */
-	uint16_t val = 100 * (pulse_tick(&apu->pulse1) + pulse_tick(&apu->pulse2));
 
-	if ((apu->cycle++ % 20) == 0)
+	clock_sequencer(apu);
+
+	if ((apu->cycles % 2) == 0)
 	{
-		apu->current_write_buf[apu->sample_buf_insert_pos] = val;
-		apu->sample_buf_insert_pos = (apu->sample_buf_insert_pos + 1) % apu->sample_buf_size;
-		if (apu->sample_buf_insert_pos == 0)
-		{
-			uint16_t* tmp = apu->current_write_buf;
-			apu->current_write_buf = apu->current_read_buf;
-			//printf("Audio buffer full\n");
+		uint16_t val = 100 * (clock_pulse(&apu->pulse1) + clock_pulse(&apu->pulse2));
 
-			SDL_LockMutex(mutex);
-			apu->current_read_buf = tmp;
-			apu->sample_buf_read_pos = 0;
-			SDL_UnlockMutex(mutex);
+		if ((apu->cycles % 40) == 0)
+		{
+			apu->current_write_buf[apu->sample_buf_insert_pos] = val;
+			apu->sample_buf_insert_pos = (apu->sample_buf_insert_pos + 1) % apu->sample_buf_size;
+			if (apu->sample_buf_insert_pos == 0)
+			{
+				uint16_t* tmp = apu->current_write_buf;
+				apu->current_write_buf = apu->current_read_buf;
+				//printf("Audio buffer full\n");
+
+				SDL_LockMutex(mutex);
+				apu->current_read_buf = tmp;
+				apu->sample_buf_read_pos = 0;
+				SDL_UnlockMutex(mutex);
+			}
 		}
 	}
+	++apu->cycles;
 
 	/*
 		1) Clock main divider (~240Hz)
