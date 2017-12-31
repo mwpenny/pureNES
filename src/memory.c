@@ -66,6 +66,8 @@ void memory_set(NES* nes, uint16_t addr, uint8_t val)
 		nes->ram[addr % RAMSIZE] = val;
 	else if (addr < 0x4000 || addr == 0x4014)
 		ppu_write(&nes->ppu, addr, val);
+	else if (addr == 0x4015)
+		apu_write(&nes->apu, addr, val);
 	else if (addr == 0x4016)
 		controllers_write_input(val);
 	else if (addr < 0x4018)

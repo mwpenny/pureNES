@@ -127,6 +127,12 @@ static void clock_sweep(APU* apu, PulseChannel* channel)
 	}
 }
 
+static void clock_lc(PulseChannel* channel)
+{
+	if (!channel->lc_halted && channel->lc != 0)
+		--channel->lc;
+}
+
 static void clock_sequencer(APU* apu)
 {
 	/* Steps common to both the 4-step and 5-step sequence */
@@ -137,9 +143,10 @@ static void clock_sequencer(APU* apu)
 			break;
 		case 14913:  /* Step 2 (after 7456.5 APU cycles) */
 			/* TODO: clock envelopes and triangle's linear counter */
-			/* TODO: clock length counters */
 			clock_sweep(apu, &apu->pulse1);
 			clock_sweep(apu, &apu->pulse2);
+			clock_lc(&apu->pulse1);
+			clock_lc(&apu->pulse2);
 			break;
 		case 22371:  /* Step 3 (after 11185.5 APU cycles) */
 			/* TODO: clock envelopes and triangle's linear counter */
@@ -154,10 +161,11 @@ static void clock_sequencer(APU* apu)
 				break;
 			case 29829:  /* Second part of step 4 (14914.5 APU cycles) */
 				/* TODO: clock envelopes and triangle's linear counter */
-				/* TODO: clock length counters */
 				/* TODO: set frame interrupt flag if interupt inhibit is clear */
 				clock_sweep(apu, &apu->pulse1);
 				clock_sweep(apu, &apu->pulse2);
+				clock_lc(&apu->pulse1);
+				clock_lc(&apu->pulse2);
 				break;
 			case 29830:
 				/* TODO: set frame interrupt flag if interupt inhibit is clear */
@@ -170,9 +178,10 @@ static void clock_sequencer(APU* apu)
 		{
 			case 37281:  /* Step 5 (18640.5 APU cycles) */
 				/* TODO: clock envelopes and triangle's linear counter */
-				/* TODO: clock length counters */
 				clock_sweep(apu, &apu->pulse1);
 				clock_sweep(apu, &apu->pulse2);
+				clock_lc(&apu->pulse1);
+				clock_lc(&apu->pulse2);
 				break;
 			case 37282:
 				apu->cycles = 0;
@@ -225,8 +234,29 @@ static void pulse_flags3_write(APU* apu, PulseChannel* channel, uint8_t val)
 static void pulse_flags4_write(PulseChannel* channel, uint8_t val)
 {
 	channel->timer.period = (channel->timer.period & 0xFF) | ((val & 7) << 8);
-	channel->length_counter = LC_INIT_VALUES[(val >> 3) & 0x1F];
+	if (channel->enabled)
+		channel->lc = LC_INIT_VALUES[(val >> 3) & 0x1F];
 	//channel->phase = 0;
+}
+
+static void status_write(APU* apu, uint8_t val)
+{
+	/* TODO: enable/disable channels */
+	/* TODO: silence all channels on power up and reset (i.e., write 0) */
+
+	apu->pulse1.enabled = val & 1;
+	apu->pulse2.enabled = (val >> 1) & 1;
+
+	if (!apu->pulse1.enabled)
+		apu->pulse1.lc = 0;
+	if (!apu->pulse2.enabled)
+		apu->pulse2.lc = 0;
+}
+
+static uint8_t status_read(APU* apu)
+{
+	/* TODO: also return DMC interrupt, frame interrupt, DMC active */
+	return ((apu->pulse2.lc > 0) << 1) | (apu->pulse1.lc > 0);
 }
 
 static uint8_t clock_pulse(PulseChannel* channel)
@@ -237,7 +267,7 @@ static uint8_t clock_pulse(PulseChannel* channel)
 		channel->timer.value = channel->timer.period;
 		channel->phase = (channel->phase + 1) & 7;
 	}
-	if (channel->timer.period < 8 || channel->sweep.target > 0x7FF)
+	if (channel->timer.period < 8 || channel->sweep.target > 0x7FF || channel->lc == 0)
 		return 0;
 	return channel->vol_env * ((channel->duty_cycle >> (7 - channel->phase)) & 1);
 }
@@ -259,6 +289,15 @@ static void write_sequencer(APU* apu, uint8_t val)
 	   between APU cycles, the effects occurs 4 CPU cycles after the write cycle */
 	apu->fc_sequence = (FCSequence)(val >> 7);
 	apu->interrupt_enabled = (val >> 6) & 1;
+
+	if (val & 0x80)
+	{
+		/* TODO: also generate "quarter frame" signal */
+		clock_sweep(apu, &apu->pulse1);
+		clock_sweep(apu, &apu->pulse2);
+		clock_lc(&apu->pulse1);
+		clock_lc(&apu->pulse2);
+	}
 }
 
 void apu_write(APU* apu, uint16_t addr, uint8_t val)
@@ -292,6 +331,9 @@ void apu_write(APU* apu, uint16_t addr, uint8_t val)
 		case 0x4007:
 			pulse_flags4_write(&apu->pulse2, val);
 			break;
+		case 0x4015:
+			status_write(apu, val);
+			break;
 		case 0x4017:
 			write_sequencer(apu, val);
 			break;
@@ -301,6 +343,11 @@ void apu_write(APU* apu, uint16_t addr, uint8_t val)
 uint8_t apu_read(APU* apu, uint16_t addr)
 {
 	/* TODO */
+	switch (addr)
+	{
+		case 0x4015:
+			return status_read(apu);
+	}
 	return 0;
 }
 

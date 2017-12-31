@@ -20,10 +20,11 @@ typedef struct {
 typedef struct {
 	Timer timer;
 	Sweep sweep;
+	uint8_t enabled;
 	uint8_t duty_cycle;
 	uint8_t phase;
 
-	uint8_t length_counter;
+	uint8_t lc;
 	uint8_t lc_halted;
 	uint8_t using_const_vol;
 	uint8_t vol_env;
