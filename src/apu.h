@@ -19,7 +19,14 @@ typedef struct {
 
 typedef struct {
 	Timer timer;
+	uint8_t start;
+	uint8_t decay;
+} Envelope;
+
+typedef struct {
+	Timer timer;
 	Sweep sweep;
+	Envelope env;
 	uint8_t enabled;
 	uint8_t duty_cycle;
 	uint8_t phase;

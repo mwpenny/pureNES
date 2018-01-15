@@ -133,13 +133,38 @@ static void clock_lc(PulseChannel* channel)
 		--channel->lc;
 }
 
+static void clock_env(PulseChannel* channel)
+{
+	Envelope* env = &channel->env;
+	if (env->start)
+	{
+		env->decay = 15;
+		env->timer.period = channel->vol_env;
+		env->start = 0;
+	}
+	else if (env->timer.value-- == 0)
+	{
+		env->timer.value = channel->vol_env;
+		if (env->decay > 0)
+		{
+			--env->decay;
+		}
+		else if (channel->lc_halted)
+		{
+			env->decay = 15;
+		}
+	}
+}
+
 static void clock_sequencer(APU* apu)
 {
 	/* Steps common to both the 4-step and 5-step sequence */
 	switch (apu->cycles)
 	{
 		case 7457:   /* Step 1 (after 3728.5 APU cycles) */
-			/* TODO: clock envelopes and triangle's linear counter */
+			/* TODO: clock triangle's linear counter */
+			clock_env(&apu->pulse1);
+			clock_env(&apu->pulse2);
 			break;
 		case 14913:  /* Step 2 (after 7456.5 APU cycles) */
 			/* TODO: clock envelopes and triangle's linear counter */
@@ -149,7 +174,9 @@ static void clock_sequencer(APU* apu)
 			clock_lc(&apu->pulse2);
 			break;
 		case 22371:  /* Step 3 (after 11185.5 APU cycles) */
-			/* TODO: clock envelopes and triangle's linear counter */
+			/* TODO: clock triangle's linear counter */
+			clock_env(&apu->pulse1);
+			clock_env(&apu->pulse2);
 			break;
 	}
 	if (apu->fc_sequence == FC_4STEP)
@@ -160,8 +187,10 @@ static void clock_sequencer(APU* apu)
 				/* TODO: set frame interrupt flag if interupt inhibit is clear */
 				break;
 			case 29829:  /* Second part of step 4 (14914.5 APU cycles) */
-				/* TODO: clock envelopes and triangle's linear counter */
+				/* TODO: clock triangle's linear counter */
 				/* TODO: set frame interrupt flag if interupt inhibit is clear */
+				clock_env(&apu->pulse1);
+				clock_env(&apu->pulse2);
 				clock_sweep(apu, &apu->pulse1);
 				clock_sweep(apu, &apu->pulse2);
 				clock_lc(&apu->pulse1);
@@ -177,7 +206,9 @@ static void clock_sequencer(APU* apu)
 		switch (apu->cycles)
 		{
 			case 37281:  /* Step 5 (18640.5 APU cycles) */
-				/* TODO: clock envelopes and triangle's linear counter */
+				/* TODO: clock triangle's linear counter */
+				clock_env(&apu->pulse1);
+				clock_env(&apu->pulse2);
 				clock_sweep(apu, &apu->pulse1);
 				clock_sweep(apu, &apu->pulse2);
 				clock_lc(&apu->pulse1);
@@ -236,6 +267,7 @@ static void pulse_flags4_write(PulseChannel* channel, uint8_t val)
 	channel->timer.period = (channel->timer.period & 0xFF) | ((val & 7) << 8);
 	if (channel->enabled)
 		channel->lc = LC_INIT_VALUES[(val >> 3) & 0x1F];
+	channel->env.start = 1;
 	//channel->phase = 0;
 }
 
@@ -262,6 +294,7 @@ static uint8_t status_read(APU* apu)
 static uint8_t clock_pulse(PulseChannel* channel)
 {
 	/* Clock pulse waveform generator */
+	uint8_t vol = 0;
 	if (channel->timer.value-- == 0)
 	{
 		channel->timer.value = channel->timer.period;
@@ -269,7 +302,8 @@ static uint8_t clock_pulse(PulseChannel* channel)
 	}
 	if (channel->timer.period < 8 || channel->sweep.target > 0x7FF || channel->lc == 0)
 		return 0;
-	return channel->vol_env * ((channel->duty_cycle >> (7 - channel->phase)) & 1);
+	vol = channel->using_const_vol ? channel->vol_env : channel->env.decay;
+	return vol * ((channel->duty_cycle >> (7 - channel->phase)) & 1);
 }
 
 /* 7  bit  0
