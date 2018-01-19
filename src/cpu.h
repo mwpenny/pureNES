@@ -6,7 +6,7 @@
 typedef enum {
 	INT_RST = 1,
 	INT_NMI = 2,
-	INT_IRQ = 3
+	INT_IRQ = 4
 } Interrupt;
 
 typedef enum {
@@ -48,7 +48,9 @@ void cpu_init(CPU* cpu, struct NES* nes);
 void cpu_power(CPU* cpu);
 void cpu_reset(CPU* cpu);
 uint16_t cpu_step(CPU* cpu);
-void cpu_interrupt(CPU* cpu, Interrupt type);
+void cpu_fire_interrupt(CPU* cpu, Interrupt type);
+void cpu_clear_interrupt(CPU* cpu, Interrupt type);
+uint8_t cpu_interrupt_status(CPU* cpu, Interrupt type);
 /*oid cpu_begin_oam_dma(CPU* cpu, uint16_t addr_start);*/
 
 #endif

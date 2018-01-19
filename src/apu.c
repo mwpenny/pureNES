@@ -5,18 +5,20 @@
 #include <SDL.h>
 
 #include "apu.h"
-
-/* Length counter load values */
-static const uint8_t LC_INIT_VALUES[32] = {
-	10, 254, 20, 2, 40, 4, 80, 6, 160, 8, 60, 10, 14, 12, 26, 14,
-	12, 16, 24, 18, 48, 20, 96, 22, 192, 24, 72, 26, 16, 28, 32, 30
-};
+#include "cpu.h"
+#include "nes.h"
 
 static const uint8_t PULSE_DUTY_CYCLES[4] = {
 	0x40,  /* 01000000 (12.5%) */
 	0x60,  /* 01100000 (25%) */
 	0x78,  /* 01111000 (50%) */
 	0x9F   /* 10011111 (75%) */
+};
+
+/* Length counter load values */
+static const uint8_t LC_INIT_VALUES[32] = {
+	10, 254, 20, 2, 40, 4, 80, 6, 160, 8, 60, 10, 14, 12, 26, 14,
+	12, 16, 24, 18, 48, 20, 96, 22, 192, 24, 72, 26, 16, 28, 32, 30
 };
 
 SDL_mutex* mutex;
@@ -58,19 +60,17 @@ int apu_init(APU* apu, struct NES* nes)
 		return -1;
 	}
 	apu->sample_buf_size = (obtained.size / sizeof(uint16_t)) * 4;
-	if (!(apu->sample_buf1 = (uint16_t*)malloc(apu->sample_buf_size * sizeof(uint16_t))))
+	if (!(apu->sample_buf1 = (uint16_t*)calloc(apu->sample_buf_size, sizeof(uint16_t))))
 	{
 		fprintf(stderr, "Error: could not allocate audio buffer 1 (%d)\n", errno);
 		return -1;
 	}
-	memset(apu->sample_buf1, 0, apu->sample_buf_size);
-	if (!(apu->sample_buf2 = (uint16_t*)malloc(apu->sample_buf_size * sizeof(uint16_t))))
+	if (!(apu->sample_buf2 = (uint16_t*)calloc(apu->sample_buf_size, sizeof(uint16_t))))
 	{
 		fprintf(stderr, "Error: could not allocate audio buffer 2 (%d)\n", errno);
 		free(apu->sample_buf1);
 		return -1;
 	}
-	memset(apu->sample_buf2, 0, apu->sample_buf_size);
 
 	if (!(mutex = SDL_CreateMutex()))
 	{
@@ -106,99 +106,95 @@ static void update_sweep_target(APU* apu, PulseChannel* channel)
 	sweep->target = channel->timer.period + c;
 }
 
-static void clock_sweep(APU* apu, PulseChannel* channel)
+static void sweep_clock(APU* apu, PulseChannel* channel)
 {
 	Sweep* sweep = &channel->sweep;
-
+	uint8_t reset = sweep->reload;
 	if (sweep->timer.value-- == 0)
 	{
-		sweep->timer.value = sweep->timer.period;
-		update_sweep_target(apu, channel);
-
 		/* Only update the channel if the target period is in range (not muted) */
-		if (sweep->enabled && sweep->shift > 0 && channel->timer.period >= 8 && sweep->target <= 0x7FF)
+		if (sweep->enabled &&
+			sweep->shift > 0 &&
+			channel->timer.period >= 8 &&
+			sweep->target <= 0x7FF)
+		{
 			channel->timer.period = sweep->target;
+		}
+		reset = 1;
 	}
-
-	if (sweep->reload)
+	if (reset)
 	{
 		sweep->timer.value = sweep->timer.period;
 		sweep->reload = 0;
+		update_sweep_target(apu, channel);
 	}
 }
 
-static void clock_lc(PulseChannel* channel)
+static void lc_clock(PulseChannel* channel)
 {
 	if (!channel->lc_halted && channel->lc != 0)
 		--channel->lc;
 }
 
-static void clock_env(PulseChannel* channel)
+static void env_clock(Envelope* env)
 {
-	Envelope* env = &channel->env;
 	if (env->start)
 	{
-		env->decay = 15;
-		env->timer.period = channel->vol_env;
+		env->decay_vol = 15;
 		env->start = 0;
 	}
 	else if (env->timer.value-- == 0)
 	{
-		env->timer.value = channel->vol_env;
-		if (env->decay > 0)
-		{
-			--env->decay;
-		}
-		else if (channel->lc_halted)
-		{
-			env->decay = 15;
-		}
+		env->timer.value = env->timer.period;
+		if (env->decay_vol > 0)
+			--env->decay_vol;
+		else if (env->looping)
+			env->decay_vol = 15;
 	}
 }
 
-static void clock_sequencer(APU* apu)
+static void fc_qframe(APU* apu)
+{
+	/* TODO: also clock triangle's linear counter */
+	env_clock(&apu->pulse1.env);
+	env_clock(&apu->pulse2.env);
+}
+
+static void fc_hframe(APU* apu)
+{
+	sweep_clock(apu, &apu->pulse1);
+	sweep_clock(apu, &apu->pulse2);
+	lc_clock(&apu->pulse1);
+	lc_clock(&apu->pulse2);
+}
+
+static void fc_clock(APU* apu)
 {
 	/* Steps common to both the 4-step and 5-step sequence */
 	switch (apu->cycles)
 	{
 		case 7457:   /* Step 1 (after 3728.5 APU cycles) */
-			/* TODO: clock triangle's linear counter */
-			clock_env(&apu->pulse1);
-			clock_env(&apu->pulse2);
-			break;
-		case 14913:  /* Step 2 (after 7456.5 APU cycles) */
-			/* TODO: clock envelopes and triangle's linear counter */
-			clock_sweep(apu, &apu->pulse1);
-			clock_sweep(apu, &apu->pulse2);
-			clock_lc(&apu->pulse1);
-			clock_lc(&apu->pulse2);
-			break;
 		case 22371:  /* Step 3 (after 11185.5 APU cycles) */
-			/* TODO: clock triangle's linear counter */
-			clock_env(&apu->pulse1);
-			clock_env(&apu->pulse2);
-			break;
+			fc_qframe(apu);
+			return;
+		case 14913:  /* Step 2 (after 7456.5 APU cycles) */
+			fc_hframe(apu);
+			return;
 	}
 	if (apu->fc_sequence == FC_4STEP)
 	{
 		switch (apu->cycles)
 		{
-			case 29828:  /* First and third parts of step 4 (14914/14915 APU cycles) */
-				/* TODO: set frame interrupt flag if interupt inhibit is clear */
-				break;
 			case 29829:  /* Second part of step 4 (14914.5 APU cycles) */
-				/* TODO: clock triangle's linear counter */
-				/* TODO: set frame interrupt flag if interupt inhibit is clear */
-				clock_env(&apu->pulse1);
-				clock_env(&apu->pulse2);
-				clock_sweep(apu, &apu->pulse1);
-				clock_sweep(apu, &apu->pulse2);
-				clock_lc(&apu->pulse1);
-				clock_lc(&apu->pulse2);
-				break;
+				fc_qframe(apu);
+				fc_hframe(apu);
+				return;
+			case 29828:  /* First and third parts of step 4 (14914/14915 APU cycles) */
 			case 29830:
-				/* TODO: set frame interrupt flag if interupt inhibit is clear */
-				apu->cycles = 0;
+				if (apu->fc_irq_enabled)
+					cpu_fire_interrupt(&apu->nes->cpu, INT_IRQ);
+				apu->cycles %= 29830;
+				return;
 		}
 	}
 	else
@@ -206,39 +202,57 @@ static void clock_sequencer(APU* apu)
 		switch (apu->cycles)
 		{
 			case 37281:  /* Step 5 (18640.5 APU cycles) */
-				/* TODO: clock triangle's linear counter */
-				clock_env(&apu->pulse1);
-				clock_env(&apu->pulse2);
-				clock_sweep(apu, &apu->pulse1);
-				clock_sweep(apu, &apu->pulse2);
-				clock_lc(&apu->pulse1);
-				clock_lc(&apu->pulse2);
-				break;
+				fc_qframe(apu);
+				fc_hframe(apu);
+				return;
 			case 37282:
 				apu->cycles = 0;
 		}
 	}
 }
 
+static uint8_t pulse_clock(PulseChannel* channel)
+{
+	/* Clock pulse waveform generator */
+	uint8_t vol = 0;
+	if (channel->timer.value-- == 0)
+	{
+		channel->timer.value = channel->timer.period;
+		channel->phase = (channel->phase + 1) & 7;
+	}
+	if (channel->timer.period < 8 || channel->sweep.target > 0x7FF || channel->lc == 0)
+		return 0;
+	vol = channel->env.enabled ? channel->env.decay_vol : channel->env.timer.period;
+	return vol * ((channel->duty >> (7 - channel->phase)) & 1);
+}
+
+
 /* 7  bit  0
    ---- ----
    DDLC VVVV
    |||| ||||
    |||| ++++- Volume/envelope (toggled by bit 5)
-   |||+------ Controls whether lower 4 bits are constant volume or
-   |||        envelope period
+   |||+------ Controls whether V is constant volume or envelope period
    ||+------- Length counter halt (when set, pauses/silences channel)
+   ||         and envelope loop control
    ++-------- Duty cycle select */
-static void pulse_flags1_write(APU* apu, PulseChannel* channel, uint8_t val)
+static void pulse_flags1_write(PulseChannel* channel, uint8_t val)
 {
-	channel->duty_cycle = PULSE_DUTY_CYCLES[(val >> 6) & 3];
-	channel->lc_halted = (val >> 5) & 1;
-	channel->using_const_vol = (val >> 4) & 1;
-	channel->vol_env = val & 0xF;
-	update_sweep_target(apu, channel);
+	channel->duty = PULSE_DUTY_CYCLES[(val >> 6) & 3];
+	channel->lc_halted = channel->env.looping = (val >> 5) & 1;
+	channel->env.enabled = !((val >> 4) & 1);
+	channel->env.timer.period = val & 0xF;
 }
 
-static void pulse_sweep_write(APU* apu, PulseChannel* channel, uint8_t val)
+/* 7  bit  0
+   ---- ----
+   EPPP NSSS
+   |||| ||||
+   |||| |+++- Shift count
+   |||| +---- Negate flag (0: sweep toward lower; 1: sweep toward higher)
+   |+++------ Sweep unit period
+   +--------- Eman;Enabled flag */
+static void pulse_sweep_write(PulseChannel* channel, uint8_t val)
 {
 	Sweep* sweep = &channel->sweep;
 	sweep->enabled = val >> 7;
@@ -246,14 +260,12 @@ static void pulse_sweep_write(APU* apu, PulseChannel* channel, uint8_t val)
 	sweep->negate = (val >> 3) & 1;
 	sweep->shift = val & 7;
 	sweep->reload = 1;
-	update_sweep_target(apu, channel);
 }
 
 /* Pulse timer low byte ($4002/$4006) */
-static void pulse_flags3_write(APU* apu, PulseChannel* channel, uint8_t val)
+static void pulse_flags3_write(PulseChannel* channel, uint8_t val)
 {
 	channel->timer.period = (channel->timer.period & 0x700) | val;
-	update_sweep_target(apu, channel);
 }
 
 /* 7  bit  0
@@ -268,133 +280,118 @@ static void pulse_flags4_write(PulseChannel* channel, uint8_t val)
 	if (channel->enabled)
 		channel->lc = LC_INIT_VALUES[(val >> 3) & 0x1F];
 	channel->env.start = 1;
-	//channel->phase = 0;
+	channel->phase = 0;
 }
 
+/* 7  bit  0
+   ---- ----
+   ---D NT21
+      + ++++- Enables/disables pulse1, pulse2, triangle, noise, or
+			  DMC channels, respctively */
 static void status_write(APU* apu, uint8_t val)
 {
-	/* TODO: enable/disable channels */
-	/* TODO: silence all channels on power up and reset (i.e., write 0) */
-
 	apu->pulse1.enabled = val & 1;
 	apu->pulse2.enabled = (val >> 1) & 1;
 
+	/* Disabling a channel sets its length counter to 0, effectively silencing it */
 	if (!apu->pulse1.enabled)
 		apu->pulse1.lc = 0;
 	if (!apu->pulse2.enabled)
 		apu->pulse2.lc = 0;
 }
 
+/* 7  bit  0
+   ---- ----
+   IF-D NT21
+   || | ++++- Set if the respective pulse1, pulse2, triangle, or noise
+   || |       length counter value is positive
+   || +------ Set if there are DMC bytes remaining
+   |+-------- Old status of the frame interrupt flag
+   +--------- Status of the DMC interrupt flag */
 static uint8_t status_read(APU* apu)
 {
-	/* TODO: also return DMC interrupt, frame interrupt, DMC active */
-	return ((apu->pulse2.lc > 0) << 1) | (apu->pulse1.lc > 0);
-}
-
-static uint8_t clock_pulse(PulseChannel* channel)
-{
-	/* Clock pulse waveform generator */
-	uint8_t vol = 0;
-	if (channel->timer.value-- == 0)
-	{
-		channel->timer.value = channel->timer.period;
-		channel->phase = (channel->phase + 1) & 7;
-	}
-	if (channel->timer.period < 8 || channel->sweep.target > 0x7FF || channel->lc == 0)
-		return 0;
-	vol = channel->using_const_vol ? channel->vol_env : channel->env.decay;
-	return vol * ((channel->duty_cycle >> (7 - channel->phase)) & 1);
+	/* TODO: also return DMC interrupt, DMC active */
+	uint8_t irq_status = apu->fc_irq_enabled && cpu_interrupt_status(&apu->nes->cpu, INT_IRQ);
+	cpu_clear_interrupt(&apu->nes->cpu, INT_IRQ);
+	return ((apu->pulse2.lc > 0) << 1) |
+		   (apu->pulse1.lc > 0) |
+		   (irq_status << 6);
 }
 
 /* 7  bit  0
    ---- ----
    MI-- ----
    |+-------- Interrupt inhibit flag
-   +--------- Sequencer mode (0: 4-step, 1: 5-step) */
-static void write_sequencer(APU* apu, uint8_t val)
+   +--------- Frame counter sequence (0: 4-step, 1: 5-step) */
+static void fc_write(APU* apu, uint8_t val)
 {
 	/* TODO: reset divider and sequencer */
 	/* TODO: After 3 or 4 CPU clock cycles*, the timer is reset */
-	/* TODO: If the mode flag is set, then both "quarter frame" and
-	   "half frame" signals are also generated. */
 
 	/* TODO: If the write occurs during an APU cycle, the effects occur
 	   3 CPU cycles after the $4017 write cycle, and if the write occurs
 	   between APU cycles, the effects occurs 4 CPU cycles after the write cycle */
+
 	apu->fc_sequence = (FCSequence)(val >> 7);
-	apu->interrupt_enabled = (val >> 6) & 1;
+	apu->fc_irq_enabled = (val & 0x40) == 0;
+
+	if (!apu->fc_irq_enabled)
+		cpu_clear_interrupt(&apu->nes->cpu, INT_IRQ);
 
 	if (val & 0x80)
 	{
-		/* TODO: also generate "quarter frame" signal */
-		clock_sweep(apu, &apu->pulse1);
-		clock_sweep(apu, &apu->pulse2);
-		clock_lc(&apu->pulse1);
-		clock_lc(&apu->pulse2);
+		/* TODO: this actually happens 2 or 3 cycles after the write */
+		fc_qframe(apu);
+		fc_hframe(apu);
 	}
+	apu->cycles = 0;
 }
+
+
+static void (*PULSE_REGS[4])(PulseChannel*, uint8_t) = {
+	pulse_flags1_write, pulse_sweep_write, pulse_flags3_write, pulse_flags4_write
+};
 
 void apu_write(APU* apu, uint16_t addr, uint8_t val)
 {
+	if (addr >= 0x4000 && addr <= 0x4007)
+	{
+		/* Writing to a pulse register */
+		PulseChannel* channel = (addr & 4) ? &apu->pulse2 : &apu->pulse1;
+		PULSE_REGS[addr & 3](channel, val);
+		update_sweep_target(apu, channel);
+		return;
+	}
+
 	/* TODO: implement all registers */
-	/* TODO: optimize (look up tables may be useful for units with the same
-	   types of registers (i.e., pulse) */
 	switch (addr)
 	{
-		case 0x4000:
-			pulse_flags1_write(apu, &apu->pulse1, val);
-			break;
-		case 0x4001:
-			pulse_sweep_write(apu, &apu->pulse1, val);
-			break;
-		case 0x4002:
-			pulse_flags3_write(apu, &apu->pulse1, val);
-			break;
-		case 0x4003:
-			pulse_flags4_write(&apu->pulse1, val);
-			break;
-		case 0x4004:
-			pulse_flags1_write(apu, &apu->pulse2, val);
-			break;
-		case 0x4005:
-			pulse_sweep_write(apu, &apu->pulse2, val);
-			break;
-		case 0x4006:
-			pulse_flags3_write(apu, &apu->pulse2, val);
-			break;
-		case 0x4007:
-			pulse_flags4_write(&apu->pulse2, val);
-			break;
 		case 0x4015:
 			status_write(apu, val);
 			break;
 		case 0x4017:
-			write_sequencer(apu, val);
+			fc_write(apu, val);
 			break;
 	}
 }
 
 uint8_t apu_read(APU* apu, uint16_t addr)
 {
-	/* TODO */
-	switch (addr)
-	{
-		case 0x4015:
-			return status_read(apu);
-	}
-	return 0;
+	if (addr == 0x4015)
+		return status_read(apu);
+	else
+		return 0;
 }
 
 void apu_tick(APU* apu)
 {
-	/* TODO: safe threading */
-
-	clock_sequencer(apu);
+	fc_clock(apu);
 
 	if ((apu->cycles % 2) == 0)
 	{
-		uint16_t val = 100 * (clock_pulse(&apu->pulse1) + clock_pulse(&apu->pulse2));
+		uint16_t val = 100 * (pulse_clock(&apu->pulse1) + pulse_clock(&apu->pulse2));
 
+		/* Output sample */
 		if ((apu->cycles % 40) == 0)
 		{
 			apu->current_write_buf[apu->sample_buf_insert_pos] = val;

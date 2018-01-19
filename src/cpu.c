@@ -881,7 +881,8 @@ uint16_t cpu_step(CPU* cpu)
 	}
 	else if ((cpu->pending_interrupts & INT_IRQ) && !(cpu->p & FLAG_I))
 	{
-		cpu->pending_interrupts &= ~INT_IRQ;
+		/* IRQ line is level-sensitive. External hardware device must release the line */
+		/*cpu->pending_interrupts &= ~INT_IRQ;*/
 		jump_interrupt(cpu, ADDR_IRQ);
 		cpu->cycles += 7;
 	}
@@ -906,9 +907,19 @@ uint16_t cpu_step(CPU* cpu)
 	return (cpu->cycles - old_cycles);  /* Cycles taken */
 }
 
-void cpu_interrupt(CPU* cpu, Interrupt type)
+void cpu_fire_interrupt(CPU* cpu, Interrupt type)
 {
 	cpu->pending_interrupts |= type;
+}
+
+void cpu_clear_interrupt(CPU* cpu, Interrupt type)
+{
+	cpu->pending_interrupts &= ~type;
+}
+
+uint8_t cpu_interrupt_status(CPU* cpu, Interrupt type)
+{
+	return (cpu->pending_interrupts & type) != 0;
 }
 
 /*void cpu_begin_oam_dma(CPU* cpu, uint16_t addr_start)

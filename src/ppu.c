@@ -608,7 +608,7 @@ void ppu_tick(PPU* ppu, RenderSurface screen)
 
 		/* TODO: NMI delay */
 		if (NMI_ENABLED)
-			cpu_interrupt(&ppu->nes->cpu, INT_NMI);
+			cpu_fire_interrupt(&ppu->nes->cpu, INT_NMI);
 	}
 	else if (PRERENDER_LINE)
 	{

@@ -19,8 +19,10 @@ typedef struct {
 
 typedef struct {
 	Timer timer;
+	uint8_t enabled;
+	uint8_t looping;
 	uint8_t start;
-	uint8_t decay;
+	uint8_t decay_vol;
 } Envelope;
 
 typedef struct {
@@ -28,13 +30,11 @@ typedef struct {
 	Sweep sweep;
 	Envelope env;
 	uint8_t enabled;
-	uint8_t duty_cycle;
+	uint8_t duty;
 	uint8_t phase;
 
 	uint8_t lc;
 	uint8_t lc_halted;
-	uint8_t using_const_vol;
-	uint8_t vol_env;
 } PulseChannel;
 
 typedef enum {
@@ -46,7 +46,7 @@ typedef struct {
 	struct NES* nes;
 	PulseChannel pulse1, pulse2;
 	FCSequence fc_sequence;
-	uint8_t interrupt_enabled;
+	uint8_t fc_irq_enabled;
 
 	uint32_t sample_buf_size;
 	uint32_t sample_buf_insert_pos;
