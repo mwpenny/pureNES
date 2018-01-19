@@ -26,16 +26,28 @@ typedef struct {
 } Envelope;
 
 typedef struct {
+	uint8_t enabled;
+	uint8_t value;
+} LengthCounter;
+
+typedef struct {
 	Timer timer;
 	Sweep sweep;
 	Envelope env;
+	LengthCounter lc;
 	uint8_t enabled;
 	uint8_t duty;
 	uint8_t phase;
-
-	uint8_t lc;
-	uint8_t lc_halted;
 } PulseChannel;
+
+typedef struct {
+	Timer timer;
+	Envelope env;
+	LengthCounter lc;
+	uint16_t lfsr;
+	uint8_t enabled;
+	uint8_t mode;
+} NoiseChannel;
 
 typedef enum {
 	FC_4STEP = 0,
@@ -45,6 +57,7 @@ typedef enum {
 typedef struct {
 	struct NES* nes;
 	PulseChannel pulse1, pulse2;
+	NoiseChannel noise;
 	FCSequence fc_sequence;
 	uint8_t fc_irq_enabled;
 

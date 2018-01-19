@@ -83,6 +83,8 @@ int apu_init(APU* apu, struct NES* nes)
     SDL_PauseAudio(0);
 	apu->current_read_buf = apu->sample_buf1;
 	apu->current_write_buf = apu->sample_buf2;
+
+	apu->noise.lfsr = 1;
 	return 0;
 }
 
@@ -130,10 +132,10 @@ static void sweep_clock(APU* apu, PulseChannel* channel)
 	}
 }
 
-static void lc_clock(PulseChannel* channel)
+static void lc_clock(LengthCounter* lc)
 {
-	if (!channel->lc_halted && channel->lc != 0)
-		--channel->lc;
+	if (lc->enabled && lc->value != 0)
+		--lc->value;
 }
 
 static void env_clock(Envelope* env)
@@ -164,8 +166,9 @@ static void fc_hframe(APU* apu)
 {
 	sweep_clock(apu, &apu->pulse1);
 	sweep_clock(apu, &apu->pulse2);
-	lc_clock(&apu->pulse1);
-	lc_clock(&apu->pulse2);
+	lc_clock(&apu->pulse1.lc);
+	lc_clock(&apu->pulse2.lc);
+	lc_clock(&apu->noise.lc);
 }
 
 static void fc_clock(APU* apu)
@@ -220,10 +223,25 @@ static uint8_t pulse_clock(PulseChannel* channel)
 		channel->timer.value = channel->timer.period;
 		channel->phase = (channel->phase + 1) & 7;
 	}
-	if (channel->timer.period < 8 || channel->sweep.target > 0x7FF || channel->lc == 0)
+	if (channel->timer.period < 8 || channel->sweep.target > 0x7FF || channel->lc.value == 0)
 		return 0;
 	vol = channel->env.enabled ? channel->env.decay_vol : channel->env.timer.period;
 	return vol * ((channel->duty >> (7 - channel->phase)) & 1);
+}
+
+static uint8_t noise_clock(NoiseChannel* channel)
+{
+	/* Noise pulse waveform generator */
+	if (channel->timer.value-- == 0)
+	{
+		uint8_t fb = channel->lfsr & 1;
+		channel->timer.value = channel->timer.period;
+		fb ^= channel->mode ? ((channel->lfsr >> 6) & 1) : (channel->lfsr >> 1) & 1;
+		channel->lfsr = ((channel->lfsr >> 1) & 0x3FFF) | fb << 14;
+	}
+	if ((channel->lfsr & 1) && channel->lc.value > 0)
+		return channel->env.enabled ? channel->env.decay_vol : channel->env.timer.period;
+	return 0;
 }
 
 
@@ -239,7 +257,8 @@ static uint8_t pulse_clock(PulseChannel* channel)
 static void pulse_flags1_write(PulseChannel* channel, uint8_t val)
 {
 	channel->duty = PULSE_DUTY_CYCLES[(val >> 6) & 3];
-	channel->lc_halted = channel->env.looping = (val >> 5) & 1;
+	channel->env.looping = (val >> 5) & 1;
+	channel->lc.enabled = !channel->env.looping;
 	channel->env.enabled = !((val >> 4) & 1);
 	channel->env.timer.period = val & 0xF;
 }
@@ -278,10 +297,51 @@ static void pulse_flags4_write(PulseChannel* channel, uint8_t val)
 {
 	channel->timer.period = (channel->timer.period & 0xFF) | ((val & 7) << 8);
 	if (channel->enabled)
-		channel->lc = LC_INIT_VALUES[(val >> 3) & 0x1F];
+		channel->lc.value = LC_INIT_VALUES[(val >> 3) & 0x1F];
 	channel->env.start = 1;
 	channel->phase = 0;
 }
+
+/* 7  bit  0
+   ---- ----
+   --LC VVVV
+     || ||||
+     || ++++- Volume/envelope (toggled by bit 5)
+     |+------ Controls whether V is constant volume or envelope period
+     +------- Length counter halt (when set, pauses/silences channel)
+              and envelope loop control */
+static void noise_flags1_write(NoiseChannel* channel, uint8_t val)
+{
+	channel->env.looping = (val >> 5) & 1;
+	channel->lc.enabled = !channel->env.looping;
+	channel->env.enabled = !((val >> 4) & 1);
+	channel->env.timer.period = val & 0xF;
+}
+
+/* 7  bit  0
+   ---- ----
+   M--- PPPP
+   |    ||||
+   |    ++++- Noise period
+   +--------- Mode flag (0: long sequence; 1: short sequence) */
+static void noise_flags2_write(NoiseChannel* channel, uint8_t val)
+{
+	channel->timer.period = val & 0xF;
+	channel->mode = (val >> 7) & 1;
+}
+
+/* 7  bit  0
+   ---- ----
+   LLLL L---
+   |||| |
+   ++++ +--- Index of length counter load value */
+static void noise_flags3_write(NoiseChannel* channel, uint8_t val)
+{
+	if (channel->enabled)
+		channel->lc.value = LC_INIT_VALUES[(val >> 3) & 0x1F];
+	channel->env.start = 1;
+}
+
 
 /* 7  bit  0
    ---- ----
@@ -293,11 +353,15 @@ static void status_write(APU* apu, uint8_t val)
 	apu->pulse1.enabled = val & 1;
 	apu->pulse2.enabled = (val >> 1) & 1;
 
+	apu->noise.enabled = (val >> 3) & 1;
+
 	/* Disabling a channel sets its length counter to 0, effectively silencing it */
 	if (!apu->pulse1.enabled)
-		apu->pulse1.lc = 0;
+		apu->pulse1.lc.value = 0;
 	if (!apu->pulse2.enabled)
-		apu->pulse2.lc = 0;
+		apu->pulse2.lc.value = 0;
+	if (!apu->noise.enabled)
+		apu->noise.lc.value = 0;
 }
 
 /* 7  bit  0
@@ -313,8 +377,9 @@ static uint8_t status_read(APU* apu)
 	/* TODO: also return DMC interrupt, DMC active */
 	uint8_t irq_status = apu->fc_irq_enabled && cpu_interrupt_status(&apu->nes->cpu, INT_IRQ);
 	cpu_clear_interrupt(&apu->nes->cpu, INT_IRQ);
-	return ((apu->pulse2.lc > 0) << 1) |
-		   (apu->pulse1.lc > 0) |
+	return ((apu->noise.lc.value > 0) << 3) |
+		   ((apu->pulse2.lc.value > 0) << 1) |
+		   (apu->pulse1.lc.value > 0) |
 		   (irq_status << 6);
 }
 
@@ -347,7 +412,6 @@ static void fc_write(APU* apu, uint8_t val)
 	apu->cycles = 0;
 }
 
-
 static void (*PULSE_REGS[4])(PulseChannel*, uint8_t) = {
 	pulse_flags1_write, pulse_sweep_write, pulse_flags3_write, pulse_flags4_write
 };
@@ -366,6 +430,15 @@ void apu_write(APU* apu, uint16_t addr, uint8_t val)
 	/* TODO: implement all registers */
 	switch (addr)
 	{
+		case 0x400C:
+			noise_flags1_write(&apu->noise, val);
+			break;
+		case 0x400E:
+			noise_flags2_write(&apu->noise, val);
+			break;
+		case 0x400F:
+			noise_flags3_write(&apu->noise, val);
+			break;
 		case 0x4015:
 			status_write(apu, val);
 			break;
@@ -389,7 +462,8 @@ void apu_tick(APU* apu)
 
 	if ((apu->cycles % 2) == 0)
 	{
-		uint16_t val = 100 * (pulse_clock(&apu->pulse1) + pulse_clock(&apu->pulse2));
+		/* TODO: nonlinear mix */
+		uint16_t val = 100 * (pulse_clock(&apu->pulse1) + pulse_clock(&apu->pulse2)) + (50 * noise_clock(&apu->noise));
 
 		/* Output sample */
 		if ((apu->cycles % 40) == 0)
