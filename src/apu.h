@@ -41,6 +41,20 @@ typedef struct {
 } PulseChannel;
 
 typedef struct {
+	uint8_t reload;
+	uint8_t control;
+	Timer timer;
+} LinearCounter;
+
+typedef struct {
+	Timer timer;
+	LengthCounter lc;
+	LinearCounter lin_ctr;
+	uint8_t enabled;
+	uint8_t phase;
+} TriangleChannel;
+
+typedef struct {
 	Timer timer;
 	Envelope env;
 	LengthCounter lc;
@@ -57,6 +71,7 @@ typedef enum {
 typedef struct {
 	struct NES* nes;
 	PulseChannel pulse1, pulse2;
+	TriangleChannel triangle;
 	NoiseChannel noise;
 	FCSequence fc_sequence;
 	uint8_t fc_irq_enabled;

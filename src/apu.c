@@ -21,6 +21,11 @@ static const uint8_t LC_INIT_VALUES[32] = {
 	12, 16, 24, 18, 48, 20, 96, 22, 192, 24, 72, 26, 16, 28, 32, 30
 };
 
+static const uint8_t TRI_SEQUENCE[32] = {
+	15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0,
+	0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
+};
+
 SDL_mutex* mutex;
 
 void audio_callback(void* userdata, uint8_t* stream, int len)
@@ -155,9 +160,20 @@ static void env_clock(Envelope* env)
 	}
 }
 
+static void lin_ctr_clock(LinearCounter* lin_ctr)
+{
+	if (lin_ctr->reload)
+		lin_ctr->timer.value = lin_ctr->timer.period;
+	else if (lin_ctr->timer.value > 0)
+		--lin_ctr->timer.value;
+
+	if (!lin_ctr->control)
+		lin_ctr->reload = 0;
+}
+
 static void fc_qframe(APU* apu)
 {
-	/* TODO: also clock triangle's linear counter */
+	lin_ctr_clock(&apu->triangle.lin_ctr);
 	env_clock(&apu->pulse1.env);
 	env_clock(&apu->pulse2.env);
 }
@@ -168,6 +184,7 @@ static void fc_hframe(APU* apu)
 	sweep_clock(apu, &apu->pulse2);
 	lc_clock(&apu->pulse1.lc);
 	lc_clock(&apu->pulse2.lc);
+	lc_clock(&apu->triangle.lc);
 	lc_clock(&apu->noise.lc);
 }
 
@@ -229,9 +246,24 @@ static uint8_t pulse_clock(PulseChannel* channel)
 	return vol * ((channel->duty >> (7 - channel->phase)) & 1);
 }
 
+static uint8_t triangle_clock(TriangleChannel* channel)
+{
+	/* Triangle waveform generator */
+	uint8_t counters_active = channel->lc.value && channel->lin_ctr.timer.value;
+	if (channel->timer.value-- == 0)
+	{
+		channel->timer.value = channel->timer.period;
+		if (counters_active)
+			channel->phase = (channel->phase + 1) & 0x1F;
+	}
+	/*if (!counters_active)
+		return 0;*/
+	return TRI_SEQUENCE[channel->phase];
+}
+
 static uint8_t noise_clock(NoiseChannel* channel)
 {
-	/* Noise pulse waveform generator */
+	/* Noise waveform generator */
 	if (channel->timer.value-- == 0)
 	{
 		uint8_t fb = channel->lfsr & 1;
@@ -304,6 +336,40 @@ static void pulse_flags4_write(PulseChannel* channel, uint8_t val)
 
 /* 7  bit  0
    ---- ----
+   CRRR RRRR
+   |||| ||||
+   |++++++++- Linear counter reload value
+   +--------- Countrol flag and length counter halt */
+static void triangle_lin_ctr_write(TriangleChannel* channel, uint8_t val)
+{
+	channel->lin_ctr.control = (val >> 7) & 1;
+	channel->lc.enabled = !channel->lin_ctr.control;
+	channel->lin_ctr.timer.period = val & 0x7F;
+}
+
+/* Triangle timer low byte */
+static void triangle_flags2_write(TriangleChannel* channel, uint8_t val)
+{
+	channel->timer.period = (channel->timer.period & 0x700) | val;
+}
+
+/* 7  bit  0
+   ---- ----
+   LLLL LTTT
+   |||| ||||
+   |||| |+++- Timer high bits
+   ++++ +---- Index of length counter load value */
+static void triangle_flags3_write(TriangleChannel* channel, uint8_t val)
+{
+	channel->timer.period = (channel->timer.period & 0xFF) | ((val & 7) << 8);
+	if (channel->enabled)
+		channel->lc.value = LC_INIT_VALUES[(val >> 3) & 0x1F];
+	channel->lin_ctr.reload = 1;
+}
+
+
+/* 7  bit  0
+   ---- ----
    --LC VVVV
      || ||||
      || ++++- Volume/envelope (toggled by bit 5)
@@ -352,7 +418,7 @@ static void status_write(APU* apu, uint8_t val)
 {
 	apu->pulse1.enabled = val & 1;
 	apu->pulse2.enabled = (val >> 1) & 1;
-
+	apu->triangle.enabled = (val >> 2) & 1;
 	apu->noise.enabled = (val >> 3) & 1;
 
 	/* Disabling a channel sets its length counter to 0, effectively silencing it */
@@ -360,6 +426,8 @@ static void status_write(APU* apu, uint8_t val)
 		apu->pulse1.lc.value = 0;
 	if (!apu->pulse2.enabled)
 		apu->pulse2.lc.value = 0;
+	if (!apu->triangle.enabled)
+		apu->triangle.lc.value = 0;
 	if (!apu->noise.enabled)
 		apu->noise.lc.value = 0;
 }
@@ -378,6 +446,7 @@ static uint8_t status_read(APU* apu)
 	uint8_t irq_status = apu->fc_irq_enabled && cpu_interrupt_status(&apu->nes->cpu, INT_IRQ);
 	cpu_clear_interrupt(&apu->nes->cpu, INT_IRQ);
 	return ((apu->noise.lc.value > 0) << 3) |
+		   ((apu->triangle.lc.value > 0) << 2) |
 		   ((apu->pulse2.lc.value > 0) << 1) |
 		   (apu->pulse1.lc.value > 0) |
 		   (irq_status << 6);
@@ -430,6 +499,15 @@ void apu_write(APU* apu, uint16_t addr, uint8_t val)
 	/* TODO: implement all registers */
 	switch (addr)
 	{
+		case 0x4008:
+			triangle_lin_ctr_write(&apu->triangle, val);
+			break;
+		case 0x400A:
+			triangle_flags2_write(&apu->triangle, val);
+			break;
+		case 0x400B:
+			triangle_flags3_write(&apu->triangle, val);
+			break;
 		case 0x400C:
 			noise_flags1_write(&apu->noise, val);
 			break;
@@ -458,12 +536,13 @@ uint8_t apu_read(APU* apu, uint16_t addr)
 
 void apu_tick(APU* apu)
 {
+	uint16_t tri_val = 100 * triangle_clock(&apu->triangle);
 	fc_clock(apu);
 
 	if ((apu->cycles % 2) == 0)
 	{
 		/* TODO: nonlinear mix */
-		uint16_t val = 100 * (pulse_clock(&apu->pulse1) + pulse_clock(&apu->pulse2)) + (50 * noise_clock(&apu->noise));
+		uint16_t val = 100 * (pulse_clock(&apu->pulse1) + pulse_clock(&apu->pulse2)) + (50 * noise_clock(&apu->noise)) + tri_val;
 
 		/* Output sample */
 		if ((apu->cycles % 40) == 0)
