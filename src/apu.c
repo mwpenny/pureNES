@@ -8,6 +8,10 @@
 #include "cpu.h"
 #include "nes.h"
 
+/* Lookup tables for audio sample non-linear mix */
+/*static uint16_t pulse_mix[31];
+static uint16_t tnd_mix[203];*/
+
 static const uint8_t PULSE_DUTY_CYCLES[4] = {
 	0x40,  /* 01000000 (12.5%) */
 	0x60,  /* 01100000 (25%) */
@@ -48,6 +52,7 @@ void audio_callback(void* userdata, uint8_t* stream, int len)
 int apu_init(APU* apu, struct NES* nes)
 {
 	/* TODO: abstract out audio init, return pointer to audio callback */
+	/*uint8_t i;*/
 	SDL_AudioSpec desired, obtained;
 	memset(apu, 0, sizeof(*apu));
 	apu->nes = nes;
@@ -89,6 +94,18 @@ int apu_init(APU* apu, struct NES* nes)
 	apu->current_read_buf = apu->sample_buf1;
 	apu->current_write_buf = apu->sample_buf2;
 
+	/*pulse_mix[0] = 0;
+	for (i = 1; i < 31; ++i)
+	{
+		float val = 95.52f / ((8128.0f / i) + 100.0f);
+		pulse_mix[i] = (uint16_t)(val * 65535);
+	}
+	tnd_mix[0] = 0;
+	for (i = 1; i < 203; ++i)
+	{
+		float val = 163.67f / ((24329.0f / i) + 100.0f);
+		tnd_mix[i] = (uint16_t)(val * 65535);
+	}*/
 	apu->noise.lfsr = 1;
 	return 0;
 }
@@ -258,6 +275,13 @@ static uint8_t triangle_clock(TriangleChannel* channel)
 	}
 	/*if (!counters_active)
 		return 0;*/
+
+	/* Fixes triangle popping during transition from inaudible to audible frequencies.
+	   Real hardware does not do this.
+
+	   TODO: remove after implementing a decent audio filter */
+	if (channel->timer.period < 2)
+		return 0;
 	return TRI_SEQUENCE[channel->phase];
 }
 
@@ -536,18 +560,28 @@ uint8_t apu_read(APU* apu, uint16_t addr)
 
 void apu_tick(APU* apu)
 {
-	uint16_t tri_val = 100 * triangle_clock(&apu->triangle);
+	uint16_t tri_val = triangle_clock(&apu->triangle);
 	fc_clock(apu);
 
 	if ((apu->cycles % 2) == 0)
 	{
-		/* TODO: nonlinear mix */
-		uint16_t val = 100 * (pulse_clock(&apu->pulse1) + pulse_clock(&apu->pulse2)) + (50 * noise_clock(&apu->noise)) + tri_val;
+		/* Linear approximation of APU non-linear mix.
+		   During testing, using the standard lookup table method resulted in static.
+
+		   TODO: try the lookup table method again after implementing DMC and proper
+		   downsampling
+
+		   See https://wiki.nesdev.com/w/index.php/APU_Mixer for more info */
+		uint16_t pulse_out = 492 * (pulse_clock(&apu->pulse1) + pulse_clock(&apu->pulse2));
+		uint16_t tnd_out = (557 * tri_val) + (323 * noise_clock(&apu->noise));
+		/*uint16_t pulse_out = pulse_mix[pulse_clock(&apu->pulse1) + pulse_clock(&apu->pulse2)];
+		uint16_t tnd_out = tnd_mix[(3 * tri_val) + (2 * noise_clock(&apu->noise))];
+		uint16_t val = pulse_out + tnd_out;*/
 
 		/* Output sample */
 		if ((apu->cycles % 40) == 0)
 		{
-			apu->current_write_buf[apu->sample_buf_insert_pos] = val;
+			apu->current_write_buf[apu->sample_buf_insert_pos] = pulse_out + tnd_out;
 			apu->sample_buf_insert_pos = (apu->sample_buf_insert_pos + 1) % apu->sample_buf_size;
 			if (apu->sample_buf_insert_pos == 0)
 			{
