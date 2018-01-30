@@ -32,16 +32,10 @@ uint8_t memory_get(NES* nes, uint16_t addr)
 		return apu_read(&nes->apu, addr);
 	else if (addr == 0x4016)
 		return controller_read_output(&nes->c1);
-	/* TODO: finish this / support multiple controllers and/or peripherals */
-	/*else if (addr == 0x4017)
-		return controller_read_output(&nes->c2);*/
-	/* TODO: read from other areas */
+	else if (addr == 0x4017)
+		return controller_read_output(&nes->c2);
 	else if (addr >= 0x8000 && addr < 0xFFFF)
 		return cartridge_read(&nes->cartridge, addr);
-
-	/* TODO: Don't silently fail like this. Should never happen though. */
-	else
-		return 0;
 }
 
 uint16_t memory_get16(NES* nes, uint16_t addr)
@@ -69,14 +63,12 @@ void memory_set(NES* nes, uint16_t addr, uint8_t val)
 	else if (addr == 0x4015)
 		apu_write(&nes->apu, addr, val);
 	else if (addr == 0x4016)
-		controllers_write_input(val);
+	{
+		controller_write_input(&nes->c1, val);
+		controller_write_input(&nes->c2, val);
+	}
 	else if (addr < 0x4018)
 		apu_write(&nes->apu, addr, val);
-	/* TODO: write to other areas */
 	else if (addr > 0x401F)
 		cartridge_write(&nes->cartridge, addr, val);
-	/*else if (addr > 0x7FFF && addr < 0xC000)
-		nes->cartridge.prg_bank1[addr - 0x8000] = val;
-	else if (addr > 0xBFFF && addr < 0x10000)
-		nes->cartridge.prg_bank2[addr - 0xC000] = val;*/
 }

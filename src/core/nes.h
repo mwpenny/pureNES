@@ -3,8 +3,6 @@
 
 #include <stdint.h>
 
-#include <SDL.h>
-
 #include "apu.h"
 #include "cartridge.h"
 #include "controller.h"
@@ -13,8 +11,14 @@
 
 #define RAMSIZE 0x800
 
-typedef struct NES
-{
+typedef void (*RenderCallback)(uint32_t* frame, void* userdata);
+
+typedef struct NESInitInfo {
+	RenderCallback render_callback;
+	void* render_userdata;
+} NESInitInfo;
+
+typedef struct NES {
 	CPU cpu;
 	PPU ppu;
 	APU apu;
@@ -24,8 +28,8 @@ typedef struct NES
 	Cartridge cartridge;
 } NES;
 
-void nes_init(NES* nes);
+void nes_init(NES* nes, NESInitInfo* init_info);
 int nes_load_rom(NES* nes, char* path);
-void nes_update(NES* nes, SDL_Surface* screen);
+int nes_update(NES* nes);
 
 #endif

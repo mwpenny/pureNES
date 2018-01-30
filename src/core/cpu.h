@@ -3,6 +3,8 @@
 
 #include <stdint.h>
 
+#define CPU_CLOCK_RATE 1773448
+
 typedef enum {
 	INT_RST = 1,
 	INT_NMI = 2,
