@@ -29,7 +29,9 @@ typedef struct NES {
 } NES;
 
 void nes_init(NES* nes, NESInitInfo* init_info);
+void nes_cleanup(NES* nes);
 int nes_load_rom(NES* nes, char* path);
+void nes_unload_rom(NES* nes);
 int nes_update(NES* nes);
 
 #endif

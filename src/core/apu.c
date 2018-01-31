@@ -30,6 +30,7 @@ static const uint8_t TRI_SEQUENCE[32] = {
 	0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
 };
 
+/* TODO: non-global */
 SDL_mutex* mutex;
 
 void audio_callback(void* userdata, uint8_t* stream, int len)
@@ -113,7 +114,12 @@ int apu_init(APU* apu, struct NES* nes)
 
 void apu_cleanup(APU* apu)
 {
-	/* TODO */
+	SDL_PauseAudio(1);
+	SDL_DestroyMutex(mutex);
+	SDL_CloseAudio();
+	free(apu->sample_buf1);
+	free(apu->sample_buf2);
+	memset(apu, 0, sizeof(APU));
 }
 
 static void update_sweep_target(APU* apu, PulseChannel* channel)

@@ -32,6 +32,18 @@ int nes_load_rom(NES* nes, char* path)
 	return 0;
 }
 
+void nes_unload_rom(NES* nes)
+{
+	cartridge_unload(&nes->cartridge);
+	nes->cpu.is_running = 0;
+}
+
+void nes_cleanup(NES* nes)
+{
+	apu_cleanup(&nes->apu);
+	SDL_Quit();
+}
+
 int nes_update(NES* nes)
 {
 	uint16_t cycles = 0, i = 0;
