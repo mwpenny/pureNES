@@ -1,8 +1,7 @@
 #include <errno.h>
-#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
-
-#include <SDL.h>
 
 #include "apu.h"
 #include "cpu.h"
@@ -30,47 +29,17 @@ static const uint8_t TRI_SEQUENCE[32] = {
 	0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
 };
 
-/* TODO: non-global */
-SDL_mutex* mutex;
-
-void audio_callback(void* userdata, uint8_t* stream, int len)
+int apu_init(APU* apu, struct NES* nes, NESInitInfo* init_info)
 {
-	APU* apu = (APU*)userdata;
-	int i;
-
-	uint16_t* buf = (uint16_t*)stream;
-	len /= 2;
-
-	SDL_LockMutex(mutex);
-	for (i = 0; i < len; ++i)
-	{
-		buf[i] = apu->current_read_buf[apu->sample_buf_read_pos];
-		apu->sample_buf_read_pos = (apu->sample_buf_read_pos + 1) % apu->sample_buf_size;
-	}
-	SDL_UnlockMutex(mutex);
-}
-
-int apu_init(APU* apu, struct NES* nes)
-{
-	/* TODO: abstract out audio init, return pointer to audio callback */
 	/*uint8_t i;*/
-	SDL_AudioSpec desired, obtained;
 	memset(apu, 0, sizeof(*apu));
+	apu->snd_cb = init_info->snd_cb;
+	apu->snd_userdata = init_info->snd_userdata;
 	apu->nes = nes;
 
 	/* TODO: proper downsampling (a real NES outputs ~1789773 samples/second) */
-	desired.freq = 44100;
-	desired.format = AUDIO_U16SYS;
-	desired.channels = 1;  /* TODO: stereo experimentation */
-	desired.samples = 2048;
-	desired.callback = audio_callback;
-	desired.userdata = apu;
-	if (SDL_OpenAudio(&desired, &obtained) != 0)
-	{
-		fprintf(stderr, "Error: could not open audio device (%d)\n", errno);
-		return -1;
-	}
-	apu->sample_buf_size = (obtained.size / sizeof(uint16_t)) * 4;
+	/* TODO: adjust buffer size based on host sample rate */
+	apu->sample_buf_size = (4096 / sizeof(uint16_t)) * 4;
 	if (!(apu->sample_buf1 = (uint16_t*)calloc(apu->sample_buf_size, sizeof(uint16_t))))
 	{
 		fprintf(stderr, "Error: could not allocate audio buffer 1 (%d)\n", errno);
@@ -83,15 +52,6 @@ int apu_init(APU* apu, struct NES* nes)
 		return -1;
 	}
 
-	if (!(mutex = SDL_CreateMutex()))
-	{
-		fprintf(stderr, "Error: could not create mutex for APU audio buffer access (%d)\n", errno);
-		free(apu->sample_buf1);
-		free(apu->sample_buf2);
-		return -1;
-	}
-
-    SDL_PauseAudio(0);
 	apu->current_read_buf = apu->sample_buf1;
 	apu->current_write_buf = apu->sample_buf2;
 
@@ -114,9 +74,6 @@ int apu_init(APU* apu, struct NES* nes)
 
 void apu_cleanup(APU* apu)
 {
-	SDL_PauseAudio(1);
-	SDL_DestroyMutex(mutex);
-	SDL_CloseAudio();
 	free(apu->sample_buf1);
 	free(apu->sample_buf2);
 	memset(apu, 0, sizeof(APU));
@@ -593,12 +550,10 @@ void apu_tick(APU* apu)
 			{
 				uint16_t* tmp = apu->current_write_buf;
 				apu->current_write_buf = apu->current_read_buf;
+				apu->current_read_buf = tmp;
 				//printf("Audio buffer full\n");
 
-				SDL_LockMutex(mutex);
-				apu->current_read_buf = tmp;
-				apu->sample_buf_read_pos = 0;
-				SDL_UnlockMutex(mutex);
+				apu->snd_cb(apu->current_read_buf, apu->sample_buf_size, apu->snd_userdata);
 			}
 		}
 	}

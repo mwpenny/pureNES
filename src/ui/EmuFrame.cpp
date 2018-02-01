@@ -1,99 +1,13 @@
+extern "C" {
+    #include <SDL.h>
+}
+
 #include "EmuFrame.h"
 
-static void frameUpdateCallback(uint32_t* frame, void* userdata)
+static void sdlAudioCallback(void* userdata, uint8_t* stream, int len)
 {
-    static_cast<Canvas*>(userdata)->updateFrame(frame);
+    static_cast<EmuFrame*>(userdata)->outputAudio((uint16_t*)stream, len/2);
 }
-
-EmulationThread::EmulationThread(Canvas* renderCanvas, std::string romPath)
-    : wxThread(wxTHREAD_JOINABLE)
-{
-    // TODO: error checking
-    NESInitInfo init_info = {frameUpdateCallback, renderCanvas};
-    nes_init(&nes, &init_info);
-    nes_load_rom(&nes, const_cast<char*>(romPath.c_str()));
-    this->stoppingEmulation = false;
-}
-
-wxThread::ExitCode EmulationThread::Entry()
-{
-    // TODO: error checking
-    wxLongLong startMS = wxGetUTCTimeMillis();
-    long long cyclesPerMS = CPU_CLOCK_RATE / 1000;
-    long long cyclesEmulated = 0;
-    running = true;
-
-    while (running)
-    {
-        // TODO: better frame limiting
-        wxLongLong cyclesNeeded = (wxGetUTCTimeMillis() - startMS) * cyclesPerMS;
-        mutex.Lock();
-        while (cyclesEmulated < cyclesNeeded)
-            cyclesEmulated += nes_update(&nes);
-        running = !stoppingEmulation;
-        mutex.Unlock();
-    }
-    nes_unload_rom(&nes);
-    nes_cleanup(&nes);
-    running = false;
-    return NULL;
-}
-
-ControllerButton EmulationThread::resolveNESButton(int wxKey)
-{
-    // TODO: make this user configurable
-    switch (wxKey)
-    {
-        case WXK_UP:
-            return CONTROLLER_UP;
-        case WXK_DOWN:
-            return CONTROLLER_DOWN;
-        case WXK_LEFT:
-            return CONTROLLER_LEFT;
-        case WXK_RIGHT:
-            return CONTROLLER_RIGHT;
-        case 'Z':
-            return CONTROLLER_B;
-        case 'X':
-            return CONTROLLER_A;
-        case WXK_SHIFT:
-            return CONTROLLER_SELECT;
-        case WXK_RETURN:
-            return CONTROLLER_START;
-        default:
-            return CONTROLLER_NONE;
-    }
-}
-
-void EmulationThread::updateController(int wxKey, bool pressed)
-{
-    // TODO: multiple controllers
-    ControllerButton btn = resolveNESButton(wxKey);
-    if (btn != CONTROLLER_NONE)
-    {
-        mutex.Lock();
-        controller_set_button(&nes.c1, btn, pressed);
-        mutex.Unlock();
-    }
-}
-
-bool EmulationThread::isRunning()
-{
-    bool running;
-    mutex.Lock();
-    running = this->running;
-    mutex.Unlock();
-    return running;
-}
-
-void EmulationThread::terminate()
-{
-    mutex.Lock();
-    stoppingEmulation = true;
-    mutex.Unlock();
-    Wait(wxTHREAD_WAIT_BLOCK);
-}
-
 
 EmuFrame::EmuFrame(const wxString& title, const wxPoint& pos, const wxSize& size)
 	: wxFrame(NULL, wxID_ANY, title, pos, size)
@@ -114,13 +28,35 @@ EmuFrame::EmuFrame(const wxString& title, const wxPoint& pos, const wxSize& size
 
     canvas = new Canvas(this, 256, 240, 4);
     emuThread = NULL;
+
+    // TODO: adjustable in GUI
+    SDL_AudioSpec desired, obtained;
+    desired.freq = 44100;
+    desired.format = AUDIO_U16SYS;
+    desired.channels = 1;  // TODO: stereo experimentation
+    desired.samples = 2048;
+    desired.callback = sdlAudioCallback;
+    desired.userdata = this;
+    bufferedAudio = NULL;
+
+    // TODO: error checking
+    SDL_Init(SDL_INIT_AUDIO);
+    SDL_OpenAudio(&desired, &obtained);
+    SDL_PauseAudio(0);
+}
+
+EmuFrame::~EmuFrame()
+{
+    SDL_PauseAudio(1);
+    SDL_CloseAudio();
+    SDL_Quit();
 }
 
 void EmuFrame::startEmulation(std::string romPath)
 {
     // TODO: error checking (file actually NES ROM)
     stopEmulation();
-    emuThread = new EmulationThread(canvas, romPath);
+    emuThread = new EmulationThread(this, canvas, romPath);
     emuThread->Run();
 }
 
@@ -133,6 +69,39 @@ void EmuFrame::stopEmulation()
         delete emuThread;
         emuThread = NULL;
     }
+}
+
+void EmuFrame::exit()
+{
+    stopEmulation();
+    Destroy();
+}
+
+void EmuFrame::setAudioBuf(uint16_t* buf, uint32_t bufSize)
+{
+    audioMutex.Lock();
+    bufferedAudio = buf;
+    audioBufSize = bufSize;
+    audioBufPos = 0;
+    audioMutex.Unlock();
+}
+
+void EmuFrame::outputAudio(uint16_t* stream, int len)
+{
+    audioMutex.Lock();
+    if (bufferedAudio)
+    {
+        for (int i = 0; i < len; ++i)
+        {
+            stream[i] = bufferedAudio[audioBufPos];
+            audioBufPos = (audioBufPos + 1) % audioBufSize;
+        }
+    }
+    else
+    {
+        memset(stream, 0, len * 2);
+    }
+    audioMutex.Unlock();
 }
 
 void EmuFrame::onKeyDown(wxKeyEvent& evt)
@@ -160,12 +129,6 @@ void EmuFrame::onDropFiles(wxDropFilesEvent& evt)
 {
     std::string path = evt.GetFiles()[0].ToStdString();
     startEmulation(path);
-}
-
-void EmuFrame::exit()
-{
-    stopEmulation();
-    Destroy();
 }
 
 void EmuFrame::onExit(wxCommandEvent& evt)

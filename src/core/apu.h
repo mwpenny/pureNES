@@ -68,8 +68,17 @@ typedef enum {
 	FC_5STEP
 } FCSequence;
 
+/* TODO: do this in a way that doesn't result in duplication */
+typedef void (*SoundCallback)(uint16_t* read_buf, uint32_t buf_size, void* userdata);
+
+struct NES;
+struct NESInitInfo;
+
 typedef struct {
 	struct NES* nes;
+	SoundCallback snd_cb;
+	void* snd_userdata;
+
 	PulseChannel pulse1, pulse2;
 	TriangleChannel triangle;
 	NoiseChannel noise;
@@ -78,14 +87,12 @@ typedef struct {
 
 	uint32_t sample_buf_size;
 	uint32_t sample_buf_insert_pos;
-	uint32_t sample_buf_read_pos;
 	uint16_t *sample_buf1, *sample_buf2;
 	uint16_t *current_read_buf, *current_write_buf;
-	uint32_t read_buffer_filled;
 	uint32_t cycles;
 } APU;
 
-int apu_init(APU* apu, struct NES* nes);
+int apu_init(APU* apu, struct NES* nes, struct NESInitInfo* init_info);
 void apu_cleanup(APU* apu);
 void apu_write(APU* apu, uint16_t addr, uint8_t val);
 uint8_t apu_read (APU* apu, uint16_t addr);

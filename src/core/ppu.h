@@ -13,6 +13,7 @@ typedef struct {
 		uint8_t idx;
 } Sprite;
 
+/* TODO: do this in a way that doesn't result in duplication */
 typedef void (*RenderCallback)(uint32_t* frame, void* userdata);
 
 struct NES;
@@ -20,7 +21,7 @@ struct NESInitInfo;
 
 typedef struct {
 	struct NES* nes;
-	RenderCallback render_callback;
+	RenderCallback render_cb;
 	void* render_userdata;
 	uint32_t framebuffer[256*240];
 	

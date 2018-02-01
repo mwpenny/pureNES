@@ -1,8 +1,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <SDL.h>
-
 #include "cartridge.h"
 #include "nes.h"
 
@@ -11,13 +9,10 @@ void nes_init(NES* nes, NESInitInfo* init_info)
 	/* Initialize the system */
 	memset(nes, 0, sizeof(*nes));
 
-	/* TODO: move this */
-	SDL_Init(SDL_INIT_AUDIO);
-
 	memset(nes->ram, 0, RAMSIZE);
 	cpu_init(&nes->cpu, nes);
 	ppu_init(&nes->ppu, nes, init_info);
-	apu_init(&nes->apu, nes);
+	apu_init(&nes->apu, nes, init_info);
 	controller_init(&nes->c1);
 	controller_init(&nes->c2);
 }
@@ -41,7 +36,6 @@ void nes_unload_rom(NES* nes)
 void nes_cleanup(NES* nes)
 {
 	apu_cleanup(&nes->apu);
-	SDL_Quit();
 }
 
 int nes_update(NES* nes)

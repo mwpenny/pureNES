@@ -603,7 +603,7 @@ void ppu_tick(PPU* ppu)
 	}
 	if (VBLANK_START)
 	{
-		ppu->render_callback(ppu->framebuffer, ppu->render_userdata);
+		ppu->render_cb(ppu->framebuffer, ppu->render_userdata);
 		ppu->vblank_started = 1;
 
 		/* TODO: NMI delay */
@@ -647,7 +647,7 @@ void ppu_init(PPU* ppu, NES* nes, NESInitInfo* init_info)
 {
 	memset(ppu, 0, sizeof(*ppu));
 	ppu->nes = nes;
-	ppu->render_callback = init_info->render_callback;
+	ppu->render_cb = init_info->render_cb;
 	ppu->render_userdata = init_info->render_userdata;
 }
 

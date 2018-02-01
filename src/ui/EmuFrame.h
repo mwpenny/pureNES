@@ -1,37 +1,28 @@
 #ifndef EMUFRAME_H
 #define EMUFRAME_H
 
+#include <cstdint>
 #include <string>
 
 #include "Canvas.h"
-
-extern "C" {
-    #include "../core/nes.h"
-}
+#include "EmulationThread.h"
 
 #include <wx/wx.h>
 
-class EmulationThread : public wxThread {
-    public:
-        EmulationThread(Canvas* renderCanvas, std::string romPath);
-        virtual wxThread::ExitCode Entry();
-        void updateController(int wxKey, bool pressed);
-        bool isRunning();
-        void terminate();
-    private:
-        NES nes;
-        wxMutex mutex;
-        bool running, stoppingEmulation;
-
-        static ControllerButton resolveNESButton(int wxKey);
-};
-
 class EmuFrame : public wxFrame {
 	public:
-		EmuFrame(const wxString& title, const wxPoint& pos, const wxSize& size);
+        EmuFrame(const wxString& title, const wxPoint& pos, const wxSize& size);
+        virtual ~EmuFrame();
+        void setAudioBuf(uint16_t* buf, uint32_t bufSize);
+        void outputAudio(uint16_t* stream, int len);
 	private:
         Canvas* canvas;
         EmulationThread* emuThread;
+        uint16_t* bufferedAudio;
+        uint32_t audioBufSize;
+        uint32_t audioBufPos;
+        wxMutex audioMutex;
+
         void startEmulation(std::string romPath);
         void stopEmulation();
         void exit();
@@ -40,9 +31,9 @@ class EmuFrame : public wxFrame {
         void onKeyUp(wxKeyEvent& evt);
         void onFileOpen(wxCommandEvent& evt);
         void onDropFiles(wxDropFilesEvent& evt);
-		void onExit(wxCommandEvent& evt);
+        void onExit(wxCommandEvent& evt);
         void onClose(wxCloseEvent& evt);
-		wxDECLARE_EVENT_TABLE();
+        wxDECLARE_EVENT_TABLE();
 }; 
 
 #endif
