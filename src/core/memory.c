@@ -36,6 +36,8 @@ uint8_t memory_get(NES* nes, uint16_t addr)
 		return controller_read_output(&nes->c2);
 	else if (addr >= 0x8000 && addr < 0xFFFF)
 		return cartridge_read(&nes->cartridge, addr);
+	else
+		return 0;
 }
 
 uint16_t memory_get16(NES* nes, uint16_t addr)

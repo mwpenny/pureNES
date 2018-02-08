@@ -79,8 +79,7 @@ static uint8_t* dispatch_address(PPU* ppu, uint16_t addr)
 		return &ppu->pram[addr & 0x1F];
 	}
 	fprintf(stderr, "Warning: invalid PPU memory access ($%04X)\n", addr);
-	/*return &ppu->io_latch;*/
-	return 0;  /* TODO: return last value on bus */
+	return &ppu->io_latch;
 }
 
 static uint8_t ppu_mem_read(PPU* ppu, uint16_t addr)
