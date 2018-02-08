@@ -1,10 +1,13 @@
-#ifdef __WXMAC__
-	#include "OpenGL/gl.h"
+#include "Canvas.h"
+
+#ifdef __WXMSW__
+	#include <GL/gl.h>
+	#include <GL/glext.h>
+#elif __WXOSX__
+	#include <OpenGL/gl.h>
 #else
 	#include <GL/gl.h>
 #endif
-
-#include "Canvas.h"
 
 Canvas::Canvas(wxFrame* parent, uint16_t frameWidth, uint16_t frameHeight, uint8_t bpp)
 	: wxGLCanvas(parent, wxID_ANY, NULL)
@@ -62,7 +65,7 @@ void Canvas::onSize(wxSizeEvent& evt)
 void Canvas::onPaint(wxPaintEvent& evt)
 {
 	if (!IsShown())
-		return;	
+		return;
 	else if (!glInitialized)
 		initGl();
 

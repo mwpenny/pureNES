@@ -9,7 +9,7 @@ static void sdlAudioCallback(void* userdata, uint8_t* stream, int len)
     static_cast<EmuFrame*>(userdata)->outputAudio((uint16_t*)stream, len/2);
 }
 
-EmuFrame::EmuFrame(const wxString& title, const wxPoint& pos, const wxSize& size)
+EmuFrame::EmuFrame(const wxString& title, const wxPoint& pos, const wxSize& size, std::string romPath="")
 	: wxFrame(NULL, wxID_ANY, title, pos, size)
 {
 	wxMenu* menuFile = new wxMenu;
@@ -42,7 +42,8 @@ EmuFrame::EmuFrame(const wxString& title, const wxPoint& pos, const wxSize& size
     // TODO: error checking
     SDL_Init(SDL_INIT_AUDIO);
     SDL_OpenAudio(&desired, &obtained);
-    SDL_PauseAudio(0);
+	if (!romPath.empty())
+		startEmulation(romPath);
 }
 
 EmuFrame::~EmuFrame()
@@ -58,10 +59,13 @@ void EmuFrame::startEmulation(std::string romPath)
     stopEmulation();
     emuThread = new EmulationThread(this, canvas, romPath);
     emuThread->Run();
+	SDL_PauseAudio(0);
 }
 
 void EmuFrame::stopEmulation()
 {
+	setAudioBuf(NULL, 0);
+	SDL_PauseAudio(1);
     if (emuThread)
     {
         if (emuThread->isRunning())

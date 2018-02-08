@@ -1,4 +1,4 @@
-file(GLOB SRCS *.cpp)
+file(GLOB SRCS *.cpp *.h)
 
 find_package(wxWidgets REQUIRED gl core base)
 find_package(OpenGL)

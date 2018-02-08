@@ -1,3 +1,3 @@
-file(GLOB SRCS *.c)
+file(GLOB SRCS *.c *.h)
 
 add_library(mappers ${SRCS})

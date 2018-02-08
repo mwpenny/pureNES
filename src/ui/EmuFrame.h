@@ -11,7 +11,7 @@
 
 class EmuFrame : public wxFrame {
 	public:
-        EmuFrame(const wxString& title, const wxPoint& pos, const wxSize& size);
+        EmuFrame(const wxString& title, const wxPoint& pos, const wxSize& size, std::string romPath);
         virtual ~EmuFrame();
         void setAudioBuf(uint16_t* buf, uint32_t bufSize);
         void outputAudio(uint16_t* stream, int len);

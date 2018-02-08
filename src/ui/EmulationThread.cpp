@@ -40,6 +40,7 @@ wxThread::ExitCode EmulationThread::Entry()
         emuMutex.Lock();
         while (cyclesEmulated < cyclesNeeded)
             cyclesEmulated += nes_update(&nes);
+		//wxMilliSleep(1); // TODO: experiment
         running = !stoppingEmulation;
         emuMutex.Unlock();
     }
