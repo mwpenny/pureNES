@@ -106,6 +106,7 @@ static void sweep_clock(APU* apu, PulseChannel* channel)
 			sweep->target <= 0x7FF)
 		{
 			channel->timer.period = sweep->target;
+			update_sweep_target(apu, channel);
 		}
 		reset = 1;
 	}
@@ -220,7 +221,7 @@ static uint8_t pulse_clock(PulseChannel* channel)
 		channel->timer.value = channel->timer.period;
 		channel->phase = (channel->phase + 1) & 7;
 	}
-	if (channel->timer.period < 8 || channel->sweep.target > 0x7FF || channel->lc.value == 0)
+	if (channel->timer.period < 8 || (!channel->sweep.negate && channel->sweep.target > 0x7FF) || channel->lc.value == 0)
 		return 0;
 	vol = channel->env.enabled ? channel->env.decay_vol : channel->env.timer.period;
 	return vol * ((channel->duty >> (7 - channel->phase)) & 1);
