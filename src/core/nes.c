@@ -45,11 +45,11 @@ int nes_update(NES* nes)
 		cycles = cpu_step(&nes->cpu);
 
 	/* TODO: do APU and PPU still run when the CPU is halted? */
-	for (i = 0; i < cycles; ++i)
-		apu_tick(&nes->apu);
+	/*for (i = 0; i < cycles; ++i)
+		apu_tick(&nes->apu);*/
 
-	for (i = 0; i < cycles*3; ++i)
-		ppu_tick(&nes->ppu);
+	/*for (i = 0; i < cycles*3; ++i)
+		ppu_tick(&nes->ppu);*/
 
 	controller_update(&nes->c1);
 	controller_update(&nes->c2);

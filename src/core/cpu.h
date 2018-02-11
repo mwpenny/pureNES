@@ -21,10 +21,13 @@ typedef enum {
 	AMODE_REL,  /* Relative addressing */
 	AMODE_ABS,  /* Absolute addressing */
 	AMODE_ABX,  /* Absolute X-indexed addressing */
+	AMODE_AXW,  /* A write instruction using absolute x-indexed addressing */
 	AMODE_ABY,  /* Absolute Y-indexed addressing */
+	AMODE_AYW,  /* A write instruction using absolute y-indexed addressing */
 	AMODE_IND,  /* Indirect addressing */
 	AMODE_XID,  /* Indexed indirect addressing */
-	AMODE_IDY   /* Indirect indexed addressing */
+	AMODE_IDY,  /* Indirect indexed addressing */
+	AMODE_IYW   /* A write instruction using indirect indexed addressing */
 } AddressingMode;
 
 typedef struct

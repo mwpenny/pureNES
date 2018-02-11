@@ -1,6 +1,5 @@
 /* Ricoh 2A03 CPU interpreter.
    The 2A03's CPU core is essentially a MOS 6502 with BCD mode removed */
-#include <stdio.h>
 #include <string.h>
 
 #include "cpu.h"
@@ -191,12 +190,14 @@ static void php(CPU* cpu)
 static void pla(CPU* cpu)
 {
 	/* Pull accumulator from stack */
+	memory_get(cpu->nes, cpu->pc);  /* Dummy read */
 	update_zn(cpu, cpu->a = stack_pop(cpu));
 }
 static void plp(CPU* cpu)
 {
 	/* Pull processor status from stack.
 	   The B and U flags don't exist in hardware, so they get unset */
+	memory_get(cpu->nes, cpu->pc);  /* Dummy read */
 	cpu->p = stack_pop(cpu) & ~FLAG_B & ~FLAG_U;
 }
 
@@ -289,7 +290,9 @@ static void cpy(CPU* cpu)
 static void inc(CPU* cpu)
 {
 	/* Increment value at memory location */
-	uint8_t val = memory_get(cpu->nes, cpu->eff_addr) + 1;
+	uint8_t val = memory_get(cpu->nes, cpu->eff_addr);
+	memory_set(cpu->nes, cpu->eff_addr, val);  /* Dummy write */
+	++val;
 	memory_set(cpu->nes, cpu->eff_addr, val);
 	update_zn(cpu, val);
 }
@@ -306,7 +309,9 @@ static void iny(CPU* cpu)
 static void dec(CPU* cpu)
 {
 	/* Decrement memory location */
-	uint8_t val = memory_get(cpu->nes, cpu->eff_addr) - 1;
+	uint8_t val = memory_get(cpu->nes, cpu->eff_addr);
+	memory_set(cpu->nes, cpu->eff_addr, val);  /* Dummy write */
+	--val;
 	memory_set(cpu->nes, cpu->eff_addr, val);
 	update_zn(cpu, val);
 }
@@ -340,6 +345,7 @@ static void asl(CPU* cpu)
 	/* Arithmetic shift left:
 	   C <- num <- 0 */
 	uint8_t num = get_shifting_val(cpu);
+	store_shift_result(cpu, num);  /* Dummy write */
 	cpu->p = (cpu->p & ~FLAG_C) | ((num >> 7) & 1);
 	num <<= 1;
 	update_zn(cpu, num);
@@ -350,6 +356,7 @@ static void lsr(CPU* cpu)
 	/* Logical shift right:
 	   0 -> num -> C */
 	uint8_t num = get_shifting_val(cpu);
+	store_shift_result(cpu, num);  /* Dummy write */
 	cpu->p = (cpu->p & ~FLAG_C) | (num & 1);
 	num >>= 1;
 	update_zn(cpu, num);
@@ -361,6 +368,7 @@ static void rol(CPU* cpu)
 	   C <- num <- C */
 	uint8_t num = get_shifting_val(cpu);
 	uint8_t carry = (cpu->p & FLAG_C);
+	store_shift_result(cpu, num);  /* Dummy write */
 	cpu->p = (cpu->p & ~FLAG_C) | ((num >> 7) & 1);
 	num = (num << 1) | carry;
 	update_zn(cpu, num);
@@ -372,6 +380,7 @@ static void ror(CPU* cpu)
 	   C -> num -> C */
 	uint8_t num = get_shifting_val(cpu);
 	uint8_t carry = (cpu->p & FLAG_C);
+	store_shift_result(cpu, num);  /* Dummy write */
 	cpu->p = (cpu->p & ~FLAG_C) | (num & 1);
 	num = (carry << 7) | (num >> 1);
 	update_zn(cpu, num);
@@ -387,25 +396,29 @@ static void jmp(CPU* cpu)
 static void jsr(CPU* cpu)
 {
 	/* Push PC onto the stack and jump to the subroutine */
+	memory_get(cpu->nes, cpu->pc);  /* Dummy read */
 	stack_push16(cpu, cpu->pc - 1);
 	cpu->pc = cpu->eff_addr;
 }
 static void rts(CPU* cpu)
 {
 	/* Pull PC off the stack and jump to the return address */
+	memory_get(cpu->nes, cpu->pc);  /* Dummy read */
+	memory_get(cpu->nes, cpu->pc);  /* Dummy read */
 	cpu->pc = stack_pop16(cpu) + 1;
 }
 
 /** Conditional branches **/
 static void do_branch(CPU* cpu)
 {
+	memory_get(cpu->nes, (cpu->pc & 0xFF00) | (cpu->eff_addr & 0xFF));  /* Dummy read */
+
 	/* Extra cycle taken if branch is to another page */
 	if ((cpu->eff_addr & 0xFF00) != (cpu->pc & 0xFF00))
-		++cpu->cycles;
+		memory_get(cpu->nes, cpu->pc);  /* Dummy read */
 
 	/* Perform branch operation */
 	cpu->pc = cpu->eff_addr;
-	++cpu->cycles;
 }
 static void bcc(CPU* cpu)
 {
@@ -457,11 +470,18 @@ static void bvs(CPU* cpu)
 }
 
 /** System instructions **/
-static void jump_interrupt(CPU* cpu, uint16_t vector)
+static void jump_interrupt(CPU* cpu, uint16_t vector, uint8_t sw)
 {
 	uint8_t flags = cpu->p | FLAG_U;
-	if (vector == ADDR_IRQ)
+	if (sw)
+	{
 		flags |= FLAG_B;  /* B flag set on SW interrupts */
+	}
+	else
+	{
+		memory_get(cpu->nes, cpu->pc);  /* Dummy read */
+		memory_get(cpu->nes, cpu->pc);  /* Dummy read */
+	}
 	stack_push16(cpu, cpu->pc);
 	stack_push(cpu, flags);
 	cpu->p |= FLAG_I;  /* Mask interrupts while handling this one */
@@ -470,7 +490,7 @@ static void jump_interrupt(CPU* cpu, uint16_t vector)
 static void brk(CPU* cpu)
 {
 	/* Software interrupt */
-	jump_interrupt(cpu, ADDR_IRQ);
+	jump_interrupt(cpu, ADDR_IRQ, 1);
 }
 static void nop(CPU* cpu) {}
 static void rti(CPU* cpu)
@@ -656,74 +676,36 @@ static AddressingMode amodes[256] =
 {
 	AMODE_IMP, AMODE_XID, AMODE_IMP, AMODE_XID, AMODE_ZPG, AMODE_ZPG, AMODE_ZPG, AMODE_ZPG,
 	AMODE_IMP, AMODE_IMM, AMODE_ACC, AMODE_IMM, AMODE_ABS, AMODE_ABS, AMODE_ABS, AMODE_ABS,
-	AMODE_REL, AMODE_IDY, AMODE_IMP, AMODE_IDY, AMODE_ZPX, AMODE_ZPX, AMODE_ZPX, AMODE_ZPX,
-	AMODE_IMP, AMODE_ABY, AMODE_IMP, AMODE_ABY, AMODE_ABX, AMODE_ABX, AMODE_ABX, AMODE_ABX,
+	AMODE_REL, AMODE_IDY, AMODE_IMP, AMODE_IYW, AMODE_ZPX, AMODE_ZPX, AMODE_ZPX, AMODE_ZPX,
+	AMODE_IMP, AMODE_ABY, AMODE_IMP, AMODE_AYW, AMODE_ABX, AMODE_ABX, AMODE_AXW, AMODE_AXW,
 	AMODE_ABS, AMODE_XID, AMODE_IMP, AMODE_XID, AMODE_ZPG, AMODE_ZPG, AMODE_ZPG, AMODE_ZPG,
 	AMODE_IMP, AMODE_IMM, AMODE_ACC, AMODE_IMM, AMODE_ABS, AMODE_ABS, AMODE_ABS, AMODE_ABS,
-	AMODE_REL, AMODE_IDY, AMODE_IMP, AMODE_IDY, AMODE_ZPX, AMODE_ZPX, AMODE_ZPX, AMODE_ZPX,
-	AMODE_IMP, AMODE_ABY, AMODE_IMP, AMODE_ABY, AMODE_ABX, AMODE_ABX, AMODE_ABX, AMODE_ABX,
+	AMODE_REL, AMODE_IDY, AMODE_IMP, AMODE_IYW, AMODE_ZPX, AMODE_ZPX, AMODE_ZPX, AMODE_ZPX,
+	AMODE_IMP, AMODE_ABY, AMODE_IMP, AMODE_AYW, AMODE_ABX, AMODE_ABX, AMODE_AXW, AMODE_AXW,
 	AMODE_IMP, AMODE_XID, AMODE_IMP, AMODE_XID, AMODE_ZPG, AMODE_ZPG, AMODE_ZPG, AMODE_ZPG,
 	AMODE_IMP, AMODE_IMM, AMODE_ACC, AMODE_IMM, AMODE_ABS, AMODE_ABS, AMODE_ABS, AMODE_ABS,
-	AMODE_REL, AMODE_IDY, AMODE_IMP, AMODE_IDY, AMODE_ZPX, AMODE_ZPX, AMODE_ZPX, AMODE_ZPX,
-	AMODE_IMP, AMODE_ABY, AMODE_IMP, AMODE_ABY, AMODE_ABX, AMODE_ABX, AMODE_ABX, AMODE_ABX,
+	AMODE_REL, AMODE_IDY, AMODE_IMP, AMODE_IYW, AMODE_ZPX, AMODE_ZPX, AMODE_ZPX, AMODE_ZPX,
+	AMODE_IMP, AMODE_ABY, AMODE_IMP, AMODE_AYW, AMODE_ABX, AMODE_ABX, AMODE_AXW, AMODE_AXW,
 	AMODE_IMP, AMODE_XID, AMODE_IMP, AMODE_XID, AMODE_ZPG, AMODE_ZPG, AMODE_ZPG, AMODE_ZPG,
 	AMODE_IMP, AMODE_IMM, AMODE_ACC, AMODE_IMM, AMODE_IND, AMODE_ABS, AMODE_ABS, AMODE_ABS,
-	AMODE_REL, AMODE_IDY, AMODE_IMP, AMODE_IDY, AMODE_ZPX, AMODE_ZPX, AMODE_ZPX, AMODE_ZPX,
-	AMODE_IMP, AMODE_ABY, AMODE_IMM, AMODE_ABY, AMODE_ABX, AMODE_ABX, AMODE_ABX, AMODE_ABX,
+	AMODE_REL, AMODE_IDY, AMODE_IMP, AMODE_IYW, AMODE_ZPX, AMODE_ZPX, AMODE_ZPX, AMODE_ZPX,
+	AMODE_IMP, AMODE_ABY, AMODE_IMM, AMODE_AYW, AMODE_ABX, AMODE_ABX, AMODE_AXW, AMODE_AXW,
+	AMODE_IMM, AMODE_XID, AMODE_IMM, AMODE_XID, AMODE_ZPG, AMODE_ZPG, AMODE_ZPG, AMODE_ZPG,
+	AMODE_IMP, AMODE_IMM, AMODE_IMP, AMODE_IMM, AMODE_ABS, AMODE_ABS, AMODE_ABS, AMODE_ABS,
+	AMODE_REL, AMODE_IYW, AMODE_IMP, AMODE_IYW, AMODE_ZPX, AMODE_ZPX, AMODE_ZPY, AMODE_ZPY,
+	AMODE_IMP, AMODE_AYW, AMODE_IMP, AMODE_AYW, AMODE_AXW, AMODE_AXW, AMODE_AYW, AMODE_AYW,
 	AMODE_IMM, AMODE_XID, AMODE_IMM, AMODE_XID, AMODE_ZPG, AMODE_ZPG, AMODE_ZPG, AMODE_ZPG,
 	AMODE_IMP, AMODE_IMM, AMODE_IMP, AMODE_IMM, AMODE_ABS, AMODE_ABS, AMODE_ABS, AMODE_ABS,
 	AMODE_REL, AMODE_IDY, AMODE_IMP, AMODE_IDY, AMODE_ZPX, AMODE_ZPX, AMODE_ZPY, AMODE_ZPY,
 	AMODE_IMP, AMODE_ABY, AMODE_IMP, AMODE_ABY, AMODE_ABX, AMODE_ABX, AMODE_ABY, AMODE_ABY,
 	AMODE_IMM, AMODE_XID, AMODE_IMM, AMODE_XID, AMODE_ZPG, AMODE_ZPG, AMODE_ZPG, AMODE_ZPG,
 	AMODE_IMP, AMODE_IMM, AMODE_IMP, AMODE_IMM, AMODE_ABS, AMODE_ABS, AMODE_ABS, AMODE_ABS,
-	AMODE_REL, AMODE_IDY, AMODE_IMP, AMODE_IDY, AMODE_ZPX, AMODE_ZPX, AMODE_ZPY, AMODE_ZPY,
-	AMODE_IMP, AMODE_ABY, AMODE_IMP, AMODE_ABY, AMODE_ABX, AMODE_ABX, AMODE_ABY, AMODE_ABY,
+	AMODE_REL, AMODE_IDY, AMODE_IMP, AMODE_IYW, AMODE_ZPX, AMODE_ZPX, AMODE_ZPX, AMODE_ZPX,
+	AMODE_IMP, AMODE_ABY, AMODE_IMP, AMODE_AYW, AMODE_ABX, AMODE_ABX, AMODE_AXW, AMODE_AXW,
 	AMODE_IMM, AMODE_XID, AMODE_IMM, AMODE_XID, AMODE_ZPG, AMODE_ZPG, AMODE_ZPG, AMODE_ZPG,
 	AMODE_IMP, AMODE_IMM, AMODE_IMP, AMODE_IMM, AMODE_ABS, AMODE_ABS, AMODE_ABS, AMODE_ABS,
-	AMODE_REL, AMODE_IDY, AMODE_IMP, AMODE_IDY, AMODE_ZPX, AMODE_ZPX, AMODE_ZPX, AMODE_ZPX,
-	AMODE_IMP, AMODE_ABY, AMODE_IMP, AMODE_ABY, AMODE_ABX, AMODE_ABX, AMODE_ABX, AMODE_ABX,
-	AMODE_IMM, AMODE_XID, AMODE_IMM, AMODE_XID, AMODE_ZPG, AMODE_ZPG, AMODE_ZPG, AMODE_ZPG,
-	AMODE_IMP, AMODE_IMM, AMODE_IMP, AMODE_IMM, AMODE_ABS, AMODE_ABS, AMODE_ABS, AMODE_ABS,
-	AMODE_REL, AMODE_IDY, AMODE_IMP, AMODE_IDY, AMODE_ZPX, AMODE_ZPX, AMODE_ZPX, AMODE_ZPX,
-	AMODE_IMP, AMODE_ABY, AMODE_IMP, AMODE_ABY, AMODE_ABX, AMODE_ABX, AMODE_ABX, AMODE_ABX
-};
-static uint8_t instr_cycles[256] =
-{
-	7, 6, 0, 8, 3, 3, 5, 5, 3, 2, 2, 2, 4, 4, 6, 6,
-	2, 5, 0, 8, 4, 4, 6, 6, 2, 4, 2, 7, 4, 4, 7, 7,
-	6, 6, 0, 8, 3, 3, 5, 5, 4, 2, 2, 2, 4, 4, 6, 6,
-	2, 5, 0, 8, 4, 4, 6, 6, 2, 4, 2, 7, 4, 4, 7, 7,
-	6, 6, 0, 8, 3, 3, 5, 5, 3, 2, 2, 2, 3, 4, 6, 6,
-	2, 5, 0, 8, 4, 4, 6, 6, 2, 4, 2, 7, 4, 4, 7, 7,
-	6, 6, 0, 8, 3, 3, 5, 5, 4, 2, 2, 2, 5, 4, 6, 6,
-	2, 5, 0, 8, 4, 4, 6, 6, 2, 4, 2, 7, 4, 4, 7, 7,
-	2, 6, 2, 6, 3, 3, 3, 3, 2, 2, 2, 2, 4, 4, 4, 4,
-	2, 6, 0, 6, 4, 4, 4, 4, 2, 5, 2, 5, 5, 5, 5, 5,
-	2, 6, 2, 6, 3, 3, 3, 3, 2, 2, 2, 2, 4, 4, 4, 4,
-	2, 5, 0, 5, 4, 4, 4, 4, 2, 4, 2, 4, 4, 4, 4, 4,
-	2, 6, 2, 8, 3, 3, 5, 5, 2, 2, 2, 2, 4, 4, 6, 6,
-	2, 5, 0, 8, 4, 4, 6, 6, 2, 4, 2, 7, 4, 4, 7, 7,
-	2, 6, 2, 8, 3, 3, 5, 5, 2, 2, 2, 2, 4, 4, 6, 6,
-	2, 5, 0, 8, 4, 4, 6, 6, 2, 4, 2, 7, 4, 4, 7, 7
-};
-static uint8_t pagecross_cycles[256] =
-{
-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-	1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-	1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-	1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-	1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-	1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-	1, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 1, 1,
-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-	1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-	1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0
+	AMODE_REL, AMODE_IDY, AMODE_IMP, AMODE_IYW, AMODE_ZPX, AMODE_ZPX, AMODE_ZPX, AMODE_ZPX,
+	AMODE_IMP, AMODE_ABY, AMODE_IMP, AMODE_AYW, AMODE_ABX, AMODE_ABX, AMODE_AXW, AMODE_AXW
 };
 
 void cpu_init(CPU* cpu, NES* nes)
@@ -748,22 +730,20 @@ void cpu_power(CPU* cpu)
 	cpu_reset(cpu);
 }
 
-static uint8_t get_pagecross_penalty(CPU* cpu, uint16_t oldaddr)
-{
-	/* Some instructions incur a cycle penalty if the new offset effective
-	   address is on a different page than the old one */
-	if ((oldaddr & 0xFF00) != (cpu->eff_addr & 0xFF00))
-		return pagecross_cycles[cpu->opcode];
-	return 0;
-}
-
 static void set_eff_addr_abs_indexed(CPU* cpu, uint8_t val)
 {
 	/* Use the the next two bytes + the value passed to get effective address */
 	uint16_t addr = memory_get16(cpu->nes, cpu->pc++);
+	uint8_t page_crossed;
 	++cpu->pc;
 	cpu->eff_addr = addr + val;
-	cpu->cycles += get_pagecross_penalty(cpu, addr);
+	addr = (addr & 0xFF00) | ((addr + val) & 0xFF);
+
+	/* Some instructions incur a cycle penalty if the new offset effective
+	   address is on a different page than the old one */
+	page_crossed = (addr & 0xFF00) != (cpu->eff_addr & 0xFF00);
+	if (page_crossed || cpu->instr_amode == AMODE_AXW || cpu->instr_amode == AMODE_AYW)
+		memory_get(cpu->nes, addr);  /* Dummy read */
 }
 
 static void update_eff_addr(CPU* cpu)
@@ -773,6 +753,7 @@ static void update_eff_addr(CPU* cpu)
 		/* Accumulator and implied addressing don't touch memory */
 		case AMODE_ACC:
 		case AMODE_IMP:
+			memory_get(cpu->nes, cpu->pc);  /* Dummy read */
 			cpu->eff_addr = 0;
 			break;
 
@@ -788,18 +769,21 @@ static void update_eff_addr(CPU* cpu)
 
 		/* Zero page, X addressing: effective address is the next byte + X */
 		case AMODE_ZPX:
-			cpu->eff_addr = (memory_get(cpu->nes, cpu->pc++) + cpu->x) & 0xFF;
+			cpu->eff_addr = memory_get(cpu->nes, cpu->pc++);
+			memory_get(cpu->nes, cpu->eff_addr);  /* Dummy read */
+			cpu->eff_addr = (cpu->eff_addr + cpu->x) & 0xFF;
 			break;
 
 		/* Zero page, X addressing: effective address is the next byte + Y */
 		case AMODE_ZPY:
-			cpu->eff_addr = (memory_get(cpu->nes, cpu->pc++) + cpu->y) & 0xFF;
+			cpu->eff_addr = memory_get(cpu->nes, cpu->pc++);
+			memory_get(cpu->nes, cpu->eff_addr);  /* Dummy read */
+			cpu->eff_addr = (cpu->eff_addr + cpu->y) & 0xFF;
 			break;
 
-		/* Relative addressing: effective address is PC + the next byte */
+		/* Relative addressing: effective address is the next byte + PC */
 		case AMODE_REL:
-			cpu->eff_addr = (int8_t)memory_get(cpu->nes, cpu->pc);
-			cpu->eff_addr += ++cpu->pc;
+			cpu->eff_addr = (int8_t)memory_get(cpu->nes, cpu->pc++) + cpu->pc;
 			break;
 
 		/* Absolute addressing: the effective address is the next two bytes */
@@ -810,11 +794,13 @@ static void update_eff_addr(CPU* cpu)
 
 		/* Absolute, X addressing: effective address is the next 2 bytes + X */
 		case AMODE_ABX:
+		case AMODE_AXW:
 			set_eff_addr_abs_indexed(cpu, cpu->x);
 			break;
 
 		/* Absolute, Y addressing: effective address is the next 2 bytes + Y */
 		case AMODE_ABY:
+		case AMODE_AYW:
 			set_eff_addr_abs_indexed(cpu, cpu->y);
 			break;
 
@@ -829,7 +815,9 @@ static void update_eff_addr(CPU* cpu)
 		   to by X + the next byte */
 		case AMODE_XID:
 		{
-			uint8_t ptr = (memory_get(cpu->nes, cpu->pc++) + cpu->x) & 0xFF;
+			uint8_t ptr = memory_get(cpu->nes, cpu->pc++);
+			memory_get(cpu->nes, ptr);  /* Dummy read */
+			ptr = (ptr + cpu->x) & 0xFF;
 			cpu->eff_addr = memory_get16_ind(cpu->nes, ptr);
 			break;
 		}
@@ -837,11 +825,16 @@ static void update_eff_addr(CPU* cpu)
 		/* Indirect indexed addressing: effective address is Y + address
 		   pointed to by next byte */
 		case AMODE_IDY:
+		case AMODE_IYW:
 		{
-			uint16_t ptr = memory_get16_ind(cpu->nes, memory_get(cpu->nes, cpu->pc++) & 0xFF);
+			uint16_t ptr = memory_get16_ind(cpu->nes, memory_get(cpu->nes, cpu->pc++));
+			uint16_t addr = (ptr & 0xFF00) | ((ptr + cpu->y) & 0xFF);
+			uint8_t page_crossed;
 			cpu->eff_addr = ptr + cpu->y;
-			cpu->cycles += get_pagecross_penalty(cpu, ptr);
-			break;
+
+			page_crossed = (addr & 0xFF00) != (cpu->eff_addr & 0xFF00);
+			if (page_crossed || cpu->instr_amode == AMODE_IYW)
+				memory_get(cpu->nes, addr);  /* Dummy read */
 		}
 	}
 }
@@ -851,7 +844,7 @@ uint16_t cpu_step(CPU* cpu)
 {
 	/*static FILE* log;*/
 
-	uint16_t old_cycles = cpu->cycles;
+	/*uint16_t old_cycles = cpu->cycles;*/
 	/*if (cpu->idle_cycles)
 	{
 		--cpu->idle_cycles;
@@ -867,6 +860,8 @@ uint16_t cpu_step(CPU* cpu)
 		return 1;
 	}*/
 
+	cpu->cycles = 0;
+
 	/* Service pending interrupts */
 	if (cpu->pending_interrupts & INT_RST)
 	{
@@ -876,17 +871,14 @@ uint16_t cpu_step(CPU* cpu)
 	else if (cpu->pending_interrupts & INT_NMI)
 	{
 		cpu->pending_interrupts &= ~INT_NMI;
-		jump_interrupt(cpu, ADDR_NMI);
-		cpu->cycles += 7;
+		jump_interrupt(cpu, ADDR_NMI, 0);
 	}
 	else if ((cpu->pending_interrupts & INT_IRQ) && !(cpu->p & FLAG_I))
 	{
 		/* IRQ line is level-sensitive. External hardware device must release the line */
 		/*cpu->pending_interrupts &= ~INT_IRQ;*/
-		jump_interrupt(cpu, ADDR_IRQ);
-		cpu->cycles += 7;
+		jump_interrupt(cpu, ADDR_IRQ, 0);
 	}
-
 	/*log = fopen("cpu.log", "a");*/
 
 	cpu->opcode = memory_get(cpu->nes, cpu->pc++);
@@ -902,9 +894,8 @@ uint16_t cpu_step(CPU* cpu)
 	/*fprintf(log, "A:%.2X X:%.2X Y:%.2X P:%.2X SP:%.2X\n", cpu->a, cpu->x, cpu->y, cpu->p, cpu->sp);
 	fclose(log);*/
 
-	cpu->cycles += instr_cycles[cpu->opcode];
 	instructions[cpu->opcode](cpu);
-	return (cpu->cycles - old_cycles);  /* Cycles taken */
+	return cpu->cycles;
 }
 
 void cpu_fire_interrupt(CPU* cpu, Interrupt type)
