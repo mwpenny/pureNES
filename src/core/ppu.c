@@ -401,8 +401,8 @@ void fetch_bg_data(PPU* ppu)
 		case 0:
 			/* Move data from internal latches to shift registers.
 			   Due to timing, the lower 8 bits will already have been shifted out */
-			ppu->bg_attr_lo |= (ppu->bg_attr_latch & 0x01) * 0xFF;
-			ppu->bg_attr_hi |= ((ppu->bg_attr_latch >> 1) & 0x01) * 0xFF;
+			ppu->bg_attr_lo |= (ppu->bg_attr_latch & 1) * 0xFF;
+			ppu->bg_attr_hi |= ((ppu->bg_attr_latch >> 1) & 1) * 0xFF;
 			ppu->bg_bmp_lo |= ppu->bg_bmp_latch & 0xFF;
 			ppu->bg_bmp_hi |= ppu->bg_bmp_latch >> 8;
 
@@ -544,9 +544,7 @@ void draw(PPU* ppu)
 				{
 					/* Sprite zero hit: opaque background and opaque sprite on
 					   the same pixel */
-					/* TODO: doesn't happen at x=255 */
-					/* TODO: check sprite is actually sprite 0: OAM may change. memcmp approach isn't reliable */
-					ppu->spr0_hit = ppu->spr0_hit || (bg_pal_idx != 0 && spr->idx == 0);
+					ppu->spr0_hit = ppu->spr0_hit || (bg_pal_idx != 0 && spr->idx == 0 && x != 255);
 					if (bg_pal_idx == 0 || !spr->back_priority)
 						color = ppu_mem_read(ppu, 0x3F10 | ((spr->palette * 4) + pidx));
 					break;
