@@ -57,8 +57,16 @@ void Canvas::initGl()
 
 void Canvas::onSize(wxSizeEvent& evt)
 { 
+    // Preserve original aspect ratio
+    /* TODO: user-configurable options: int multiplier, float multiplier, fit
+       to window (do not preserve aspect ratio) */
     wxSize size = GetSize();
-    glViewport(0, 0, size.x, size.y);
+    float multiplier = std::min(size.x/(float)frameWidth, size.y/(float)frameHeight);
+    int displayWidth = frameWidth * multiplier;
+    int displayHeight = frameHeight * multiplier;
+
+    glViewport(size.x/2 - displayWidth/2, size.y/2 - displayHeight/2, displayWidth, displayHeight);
+    //glViewport(0, 0, size.x, size.y);
     Refresh();
 }
 
