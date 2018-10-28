@@ -11,9 +11,6 @@
 
 #define RAMSIZE 0x800
 
-typedef void (*RenderCallback)(uint32_t* frame, void* userdata);
-typedef void (*SoundCallback)(uint16_t* read_buf, uint32_t buf_size, void* userdata);
-
 typedef struct NESInitInfo {
 	RenderCallback render_cb;
 	SoundCallback snd_cb;

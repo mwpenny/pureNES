@@ -52,7 +52,7 @@ void Canvas::initGl()
     glLoadIdentity();
     glOrtho(0, 1, 1, 0, -1, 1);
 
-	glInitialized = true;
+    glInitialized = true;
 }
 
 void Canvas::onSize(wxSizeEvent& evt)
