@@ -5,6 +5,7 @@
 
 #include "apu.h"
 #include "cpu.h"
+#include "memory.h"
 #include "nes.h"
 
 /* Lookup tables for audio sample non-linear mix */
@@ -28,6 +29,26 @@ static const uint8_t TRI_SEQUENCE[32] = {
 	15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0,
 	0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
 };
+
+static const uint16_t NOISE_PERIODS[16] = {
+	4, 8, 16, 32, 64, 96, 128, 160, 202, 254, 380, 508, 762, 1016, 2034, 4068
+};
+
+static const uint8_t DMC_PERIODS[16] = {
+	214, 190, 170, 160, 143, 127, 113, 107, 95, 80, 71, 64, 53, 42, 36, 27
+};
+
+static void update_irq(APU* apu)
+{
+	if (apu->fc_irq_fired || apu->dmc.irq_fired)
+	{
+		cpu_fire_interrupt(&apu->nes->cpu, INT_IRQ);
+	}
+	else
+	{
+		cpu_clear_interrupt(&apu->nes->cpu, INT_IRQ);
+	}
+}
 
 int apu_init(APU* apu, struct NES* nes, NESInitInfo* init_info)
 {
@@ -130,6 +151,7 @@ static void env_clock(Envelope* env)
 	{
 		env->decay_vol = 15;
 		env->start = 0;
+		env->timer.value = env->timer.period;
 	}
 	else if (env->timer.value-- == 0)
 	{
@@ -157,6 +179,7 @@ static void fc_qframe(APU* apu)
 	lin_ctr_clock(&apu->triangle.lin_ctr);
 	env_clock(&apu->pulse1.env);
 	env_clock(&apu->pulse2.env);
+	env_clock(&apu->noise.env);
 }
 
 static void fc_hframe(APU* apu)
@@ -171,16 +194,26 @@ static void fc_hframe(APU* apu)
 
 static void fc_clock(APU* apu)
 {
+	if (apu->fc_reset_delay && --apu->fc_reset_delay == 0)
+	{
+		if (apu->fc_sequence == FC_5STEP)
+		{
+			fc_qframe(apu);
+			fc_hframe(apu);
+		}
+		apu->cycles = 0;
+	}
+
 	/* Steps common to both the 4-step and 5-step sequence */
 	switch (apu->cycles)
 	{
 		case 7457:   /* Step 1 (after 3728.5 APU cycles) */
 		case 22371:  /* Step 3 (after 11185.5 APU cycles) */
 			fc_qframe(apu);
-			return;
+			break;
 		case 14913:  /* Step 2 (after 7456.5 APU cycles) */
 			fc_hframe(apu);
-			return;
+			break;
 	}
 	if (apu->fc_sequence == FC_4STEP)
 	{
@@ -189,13 +222,16 @@ static void fc_clock(APU* apu)
 			case 29829:  /* Second part of step 4 (14914.5 APU cycles) */
 				fc_qframe(apu);
 				fc_hframe(apu);
-				return;
+				break;
 			case 29828:  /* First and third parts of step 4 (14914/14915 APU cycles) */
 			case 29830:
 				if (apu->fc_irq_enabled)
-					cpu_fire_interrupt(&apu->nes->cpu, INT_IRQ);
+				{
+					apu->fc_irq_fired = 1;
+					update_irq(apu);
+				}
 				apu->cycles %= 29830;
-				return;
+				break;
 		}
 	}
 	else
@@ -205,9 +241,10 @@ static void fc_clock(APU* apu)
 			case 37281:  /* Step 5 (18640.5 APU cycles) */
 				fc_qframe(apu);
 				fc_hframe(apu);
-				return;
+				break;
 			case 37282:
 				apu->cycles = 0;
+				break;
 		}
 	}
 }
@@ -259,11 +296,82 @@ static uint8_t noise_clock(NoiseChannel* channel)
 		fb ^= channel->mode ? ((channel->lfsr >> 6) & 1) : (channel->lfsr >> 1) & 1;
 		channel->lfsr = ((channel->lfsr >> 1) & 0x3FFF) | fb << 14;
 	}
-	if ((channel->lfsr & 1) && channel->lc.value > 0)
+	if (((channel->lfsr & 1) == 0) && channel->lc.value > 0)
 		return channel->env.enabled ? channel->env.decay_vol : channel->env.timer.period;
 	return 0;
 }
 
+static void dmc_restart_sample(DMCChannel* channel)
+{
+	channel->curr_addr = channel->sample_addr;
+	channel->bytes_remaining = channel->sample_len;
+}
+
+/* TODO:
+   On the NTSC NES and Famicom, if a new sample byte is fetched from memory at the same time the
+   program is reading the controller through $4016/4017, a conflict occurs corrupting the data
+   read from the controller. Programs which use DPCM sample playback will normally use a redundant
+   controller read routine to work around this defect.
+
+   A similar problem occurs when reading data from the PPU through $2007, or polling $2002 for vblank. */
+
+static uint8_t dmc_clock(APU* apu, DMCChannel* channel)
+{
+	/* Refill sample buffer if needed */
+	if (channel->bytes_remaining > 0 && !channel->sample_buf_filled)
+	{
+		/* TODO: CPU is stalled to allow the longest possible write */
+		apu->nes->cpu.idle_cycles += 4;
+		/**/
+
+		channel->sample_buf = memory_get(apu->nes, channel->curr_addr);
+		channel->sample_buf_filled = 1;
+
+		/* Wrap curr_addr from $FFFF to $8000 */
+		channel->curr_addr = ((channel->curr_addr - 0x8000 + 1) % 0x8000) + 0x8000;
+		if (--channel->bytes_remaining == 0)
+		{
+			 if (channel->loop)
+			 {
+				 dmc_restart_sample(channel);
+			 }
+			 else if (channel->irq_enabled)
+			 {
+				 channel->irq_fired = 1;
+				 update_irq(apu);
+			 }
+		}
+	}
+
+	if (channel->timer.value-- == 0)
+	{
+		if (!channel->silence)
+		{
+			/* Output must be within [0, 127] */
+			uint8_t new_out = channel->output - 2 + ((channel->shift_reg & 1) * 4);
+			if ((new_out & 0x80) == 0)
+			{
+				channel->output = new_out;
+			}
+			channel->shift_reg >>= 1;
+		}
+
+		if (--channel->bits_remaining == 0)
+		{
+			/* End of output cycle */
+			channel->bits_remaining = 8;
+			channel->silence = !channel->sample_buf_filled;
+			if (!channel->silence)
+			{
+				channel->shift_reg = channel->sample_buf;
+				channel->sample_buf_filled = 0;
+			}
+		}
+
+		channel->timer.value = channel->timer.period;
+	}
+	return channel->output;
+}
 
 /* 7  bit  0
    ---- ----
@@ -380,7 +488,7 @@ static void noise_flags1_write(NoiseChannel* channel, uint8_t val)
    +--------- Mode flag (0: long sequence; 1: short sequence) */
 static void noise_flags2_write(NoiseChannel* channel, uint8_t val)
 {
-	channel->timer.period = val & 0xF;
+	channel->timer.period = NOISE_PERIODS[val & 0xF];
 	channel->mode = (val >> 7) & 1;
 }
 
@@ -396,6 +504,40 @@ static void noise_flags3_write(NoiseChannel* channel, uint8_t val)
 	channel->env.start = 1;
 }
 
+/* 7  bit  0
+   ---- ----
+   IL-- RRRR
+   ||   ||||
+   ||   ++++- Frequency
+   |+-------- Loop flag
+   +--------- Interrupt enable flag */
+static void dmc_flags_write(APU* apu, DMCChannel* channel, uint8_t val)
+{
+	channel->irq_enabled = (val >> 7) & 1;
+	channel->loop = (val >> 6) & 1;
+	channel->timer.period = DMC_PERIODS[val & 15];
+
+	if (!channel->irq_enabled)
+	{
+		channel->irq_fired = 0;
+		update_irq(apu);
+	}
+}
+
+static void dmc_direct_load_write(DMCChannel* channel, uint8_t val)
+{
+	channel->output = val;
+}
+
+static void dmc_sample_addr_write(DMCChannel* channel, uint8_t val)
+{
+	channel->sample_addr = 0xC000 + (val * 64);
+}
+
+static void dmc_sample_len_write(DMCChannel* channel, uint8_t val)
+{
+	channel->sample_len = (val * 16) + 1;
+}
 
 /* 7  bit  0
    ---- ----
@@ -408,6 +550,19 @@ static void status_write(APU* apu, uint8_t val)
 	apu->pulse2.enabled = (val >> 1) & 1;
 	apu->triangle.enabled = (val >> 2) & 1;
 	apu->noise.enabled = (val >> 3) & 1;
+
+	apu->dmc.irq_fired = 0;
+	update_irq(apu);
+
+	if (((val >> 4) & 1) == 0)
+	{
+		/* Disable DMC */
+		apu->dmc.bytes_remaining = 0;
+	}
+	else if (apu->dmc.bytes_remaining == 0)
+	{
+		dmc_restart_sample(&apu->dmc);
+	}
 
 	/* Disabling a channel sets its length counter to 0, effectively silencing it */
 	if (!apu->pulse1.enabled)
@@ -430,14 +585,18 @@ static void status_write(APU* apu, uint8_t val)
    +--------- Status of the DMC interrupt flag */
 static uint8_t status_read(APU* apu)
 {
-	/* TODO: also return DMC interrupt, DMC active */
-	uint8_t irq_status = apu->fc_irq_enabled && cpu_interrupt_status(&apu->nes->cpu, INT_IRQ);
-	cpu_clear_interrupt(&apu->nes->cpu, INT_IRQ);
-	return ((apu->noise.lc.value > 0) << 3) |
+	uint8_t fc_irq = apu->fc_irq_fired;
+
+	apu->fc_irq_fired = 0;
+	update_irq(apu);
+
+	return (apu->dmc.irq_fired << 7) |
+		   (fc_irq << 6) |
+		   ((apu->dmc.bytes_remaining > 0) << 4) |
+		   ((apu->noise.lc.value > 0) << 3) |
 		   ((apu->triangle.lc.value > 0) << 2) |
 		   ((apu->pulse2.lc.value > 0) << 1) |
-		   (apu->pulse1.lc.value > 0) |
-		   (irq_status << 6);
+		   (apu->pulse1.lc.value > 0);
 }
 
 /* 7  bit  0
@@ -447,26 +606,19 @@ static uint8_t status_read(APU* apu)
    +--------- Frame counter sequence (0: 4-step, 1: 5-step) */
 static void fc_write(APU* apu, uint8_t val)
 {
-	/* TODO: reset divider and sequencer */
-	/* TODO: After 3 or 4 CPU clock cycles*, the timer is reset */
-
-	/* TODO: If the write occurs during an APU cycle, the effects occur
-	   3 CPU cycles after the $4017 write cycle, and if the write occurs
-	   between APU cycles, the effects occurs 4 CPU cycles after the write cycle */
-
 	apu->fc_sequence = (FCSequence)(val >> 7);
 	apu->fc_irq_enabled = (val & 0x40) == 0;
 
 	if (!apu->fc_irq_enabled)
-		cpu_clear_interrupt(&apu->nes->cpu, INT_IRQ);
-
-	if (val & 0x80)
 	{
-		/* TODO: this actually happens 2 or 3 cycles after the write */
-		fc_qframe(apu);
-		fc_hframe(apu);
+		apu->fc_irq_fired = 0;
+		update_irq(apu);
 	}
-	apu->cycles = 0;
+
+	/* If the write occurs _during_ an APU cycle (i.e., odd CPU cycle), the effects occur
+	   3 CPU cycles after the $4017 write cycle, and if the write occurs _between_ APU cycles
+	   (i.e., even CPU cycle), the effects occurs 4 CPU cycles after the write cycle. */
+	apu->fc_reset_delay = 4 - (apu->cycles & 1);
 }
 
 static void (*PULSE_REGS[4])(PulseChannel*, uint8_t) = {
@@ -505,6 +657,18 @@ void apu_write(APU* apu, uint16_t addr, uint8_t val)
 		case 0x400F:
 			noise_flags3_write(&apu->noise, val);
 			break;
+		case 0x4010:
+			dmc_flags_write(apu, &apu->dmc, val);
+			break;
+		case 0x4011:
+			dmc_direct_load_write(&apu->dmc, val);
+			break;
+		case 0x4012:
+			dmc_sample_addr_write(&apu->dmc, val);
+			break;
+		case 0x4013:
+			dmc_sample_len_write(&apu->dmc, val);
+			break;
 		case 0x4015:
 			status_write(apu, val);
 			break;
@@ -537,7 +701,7 @@ void apu_tick(APU* apu)
 
 		   See https://wiki.nesdev.com/w/index.php/APU_Mixer for more info */
 		uint16_t pulse_out = 492 * (pulse_clock(&apu->pulse1) + pulse_clock(&apu->pulse2));
-		uint16_t tnd_out = (557 * tri_val) + (323 * noise_clock(&apu->noise));
+		uint16_t tnd_out = (557 * tri_val) + (323 * noise_clock(&apu->noise)) + (219 * dmc_clock(apu, &apu->dmc));
 		/*uint16_t pulse_out = pulse_mix[pulse_clock(&apu->pulse1) + pulse_clock(&apu->pulse2)];
 		uint16_t tnd_out = tnd_mix[(3 * tri_val) + (2 * noise_clock(&apu->noise))];
 		uint16_t val = pulse_out + tnd_out;*/
@@ -559,9 +723,4 @@ void apu_tick(APU* apu)
 		}
 	}
 	++apu->cycles;
-
-	/*
-		1) Clock main divider (~240Hz)
-			-Clocks sequencer (controls length counters, sweep units, the
-			 unit's linear counter, and generates IRQs) */
 }

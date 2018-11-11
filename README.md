@@ -6,10 +6,10 @@ This project has been off and on for quite a while due to work and school. My ai
 **What is mostly implemented:**
 * CPU
 * PPU
+* APU support
 * Some basic mappers (UxROM, MMC1)
 
 **What still needs to be done:**
-* APU support
 * Better timing and accuracy
 * More comprehensive mapper support
 * An actual UI

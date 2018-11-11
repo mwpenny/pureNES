@@ -883,13 +883,14 @@ uint16_t cpu_step(CPU* cpu)
 	/*static FILE* log;*/
 
 	/*uint16_t old_cycles = cpu->cycles;*/
-	/*if (cpu->idle_cycles)
+	if (cpu->idle_cycles)
 	{
 		--cpu->idle_cycles;
+		catchup(cpu->nes);
 		return 1;
 	}
 
-	if (cpu->oam_dma_started)
+	/*if (cpu->oam_dma_started)
 	{
 		uint8_t val = get(cpu->nes, cpu->oam_dma_addr++);
 		ppu_oamdata_write(&cpu->nes->ppu, val);

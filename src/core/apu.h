@@ -63,12 +63,32 @@ typedef struct {
 	uint8_t mode;
 } NoiseChannel;
 
+typedef struct {
+	Timer timer;
+
+	uint8_t irq_enabled;
+	uint8_t irq_fired;
+	uint8_t loop;
+	uint8_t sample_buf;
+	uint8_t sample_buf_filled;
+	uint8_t shift_reg;
+	uint8_t bits_remaining;
+
+	uint8_t output;
+	uint8_t silence;
+
+	uint16_t curr_addr;
+	uint16_t bytes_remaining;
+
+	uint16_t sample_addr;
+	uint16_t sample_len;
+} DMCChannel;
+
 typedef enum {
 	FC_4STEP = 0,
 	FC_5STEP
 } FCSequence;
 
-/* TODO: do this in a way that doesn't result in duplication */
 typedef void (*SoundCallback)(uint16_t* read_buf, uint32_t buf_size, void* userdata);
 
 struct NES;
@@ -82,8 +102,11 @@ typedef struct {
 	PulseChannel pulse1, pulse2;
 	TriangleChannel triangle;
 	NoiseChannel noise;
+	DMCChannel dmc;
 	FCSequence fc_sequence;
 	uint8_t fc_irq_enabled;
+	uint8_t fc_irq_fired;
+	uint8_t fc_reset_delay;
 
 	uint32_t sample_buf_size;
 	uint32_t sample_buf_insert_pos;
