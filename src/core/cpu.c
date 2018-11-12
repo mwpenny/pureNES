@@ -65,7 +65,7 @@ uint16_t get16_ind(NES* nes, uint16_t addr)
 {
 	catchup(nes);
 	catchup(nes);
-	return memory_get16(nes, addr);
+	return memory_get16_ind(nes, addr);
 }
 
 static void set(NES* nes, uint16_t addr, uint8_t val)
@@ -691,7 +691,7 @@ void xaa(CPU* cpu)
 	"BEQ", "SBC", "KIL", "ISC", "NOP", "SBC", "INC", "ISC",
 	"SED", "SBC", "NOP", "ISC", "NOP", "SBC", "INC", "ISC"
 };*/
-static void (*instructions[256])(CPU* cpu) =
+static void (* const instructions[256])(CPU* cpu) =
 {
 	brk, ora, kil, slo, nop, ora, asl, slo, php, ora, asl, anc, nop, ora, asl, slo,
 	bpl, ora, kil, slo, nop, ora, asl, slo, clc, ora, nop, slo, nop, ora, asl, slo,
@@ -710,7 +710,7 @@ static void (*instructions[256])(CPU* cpu) =
 	cpx, sbc, nop, isc, cpx, sbc, inc, isc, inx, sbc, nop, sbc, cpx, sbc, inc, isc,
 	beq, sbc, kil, isc, nop, sbc, inc, isc, sed, sbc, nop, isc, nop, sbc, inc, isc
 };
-static AddressingMode amodes[256] =
+static const AddressingMode amodes[256] =
 {
 	AMODE_IMP, AMODE_XID, AMODE_IMP, AMODE_XID, AMODE_ZPG, AMODE_ZPG, AMODE_ZPG, AMODE_ZPG,
 	AMODE_IMP, AMODE_IMM, AMODE_ACC, AMODE_IMM, AMODE_ABS, AMODE_ABS, AMODE_ABS, AMODE_ABS,
